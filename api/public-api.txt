@@ -1012,6 +1012,9 @@ public final class io.github.jichuo1.meguviz.ui.scheduler.UiScheduler implements
   public final io.github.jichuo1.meguviz.ui.scheduler.SubmitResult submitBatch(java.util.List<io.github.jichuo1.meguviz.ui.scheduler.ScheduledOperation>);
     descriptor: (Ljava/util/List;)Lio/github/jichuo1/meguviz/ui/scheduler/SubmitResult;
 
+  public final io.github.jichuo1.meguviz.ui.scheduler.SubmitResult submitBatch(io.github.jichuo1.meguviz.ui.scheduler.ScheduledOperation...);
+    descriptor: ([Lio/github/jichuo1/meguviz/ui/scheduler/ScheduledOperation;)Lio/github/jichuo1/meguviz/ui/scheduler/SubmitResult;
+
   public final void pause(boolean);
     descriptor: (Z)V
 

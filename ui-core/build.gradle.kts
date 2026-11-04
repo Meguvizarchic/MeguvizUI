@@ -27,6 +27,29 @@ dependencies {
 
 dependencyLocking { lockAllConfigurations() }
 
+afterEvaluate {
+    val unitTests = tasks.named<Test>("testDebugUnitTest")
+    val compileProbe = tasks.register<JavaCompile>("compileSchedulerProbe") {
+        dependsOn(unitTests)
+        source(rootProject.file("scripts/performance/SchedulerProbe.java"))
+        classpath = files(unitTests.map { it.classpath })
+        destinationDirectory.set(layout.buildDirectory.dir("scheduler-probe/classes"))
+        sourceCompatibility = "17"
+        targetCompatibility = "17"
+    }
+    tasks.register<JavaExec>("schedulerProbe") {
+        group = "verification"
+        description = "Runs a host-only scheduler latency/allocation probe; not an Android performance gate."
+        dependsOn(compileProbe)
+        classpath = files(compileProbe.flatMap { it.destinationDirectory }, unitTests.map { it.classpath })
+        mainClass.set("SchedulerProbe")
+        minHeapSize = "256m"
+        maxHeapSize = "256m"
+        args(providers.gradleProperty("probeWarmup").getOrElse("2000"),
+            providers.gradleProperty("probeIterations").getOrElse("4000"))
+    }
+}
+
 publishing {
     repositories { maven { name = "Candidate"; url = rootProject.layout.buildDirectory.dir("repo").get().asFile.toURI() } }
     publications { register<MavenPublication>("release") {

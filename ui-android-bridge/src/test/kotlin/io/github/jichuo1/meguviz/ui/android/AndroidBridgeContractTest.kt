@@ -45,6 +45,13 @@ class AndroidBridgeContractTest {
         fun scheduler(): FrameScheduler = FrameScheduler(this, this, { errors += it }, 64)
     }
 
+    @Test fun selectedRuntimeCandidateIsActuallyLoaded() {
+        val expected = System.getProperty("meguviz.runtime.candidate") ?: return
+        val location = checkNotNull(checkNotNull(FrameScheduler::class.java.protectionDomain).codeSource).location
+        val actual = java.io.File(location.toURI())
+        assertEquals(java.io.File(expected).canonicalFile, actual.canonicalFile)
+    }
+
     @Test fun mvxF01UpstreamTickDrainsUiImmediatelyWithoutSecondFrameOrMailbox() {
         val clock = PlatformClock()
         val upstream = clock.scheduler()

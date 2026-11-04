@@ -326,4 +326,160 @@ class SchedulerContractTest {
         assertEquals(1L, scheduler.counters.staleOperations)
         assertEquals(0, scheduler.pendingCommandCount)
     }
+
+    @Test fun stateCapacityCountsReentrantOverlapOnlyOnce() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, stateCapacity = 2, maxOperations = 1)
+        val log = mutableListOf<String>()
+        scheduler.submitState("trigger") {
+            assertEquals(1, scheduler.pendingStateCount)
+            assertEquals(SubmitResult.Accepted, scheduler.submitState("target") { log += "new" })
+            assertEquals(SubmitResult.Coalesced, scheduler.submitState("target") { log += "latest" })
+            assertEquals(1, scheduler.pendingStateCount)
+            assertEquals(SubmitResult.Accepted, scheduler.submitState("extra") { log += "extra" })
+            assertEquals(2, scheduler.pendingStateCount)
+            assertEquals(SubmitResult.Rejected(RejectionReason.STATE_CAPACITY), scheduler.submitState("full") {})
+        }
+        scheduler.submitState("target") { log += "old" }
+        driver.tick()
+        assertEquals(2, scheduler.pendingStateCount)
+        repeat(2) { driver.tick() }
+        assertEquals(listOf("latest", "extra"), log)
+        assertEquals(0, scheduler.pendingStateCount)
+        assertEquals(2L, scheduler.counters.coalescedStates)
+    }
+
+    @Test fun applyingOldSnapshotReleasesOverlapBeforeItsAction() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, stateCapacity = 2)
+        val log = mutableListOf<String>()
+        scheduler.submitState("trigger") {
+            scheduler.submitState("target") { log += "new" }
+            assertEquals(1, scheduler.pendingStateCount)
+        }
+        scheduler.submitState("target") {
+            log += "old"
+            assertEquals(1, scheduler.pendingStateCount)
+            scheduler.submitState("extra") { log += "extra" }
+            assertEquals(2, scheduler.pendingStateCount)
+        }
+        driver.tick()
+        assertEquals(listOf("old"), log)
+        driver.tick()
+        assertEquals(listOf("old", "new", "extra"), log)
+        assertEquals(0, scheduler.pendingStateCount)
+    }
+
+    @Test fun discardSnapshotOverlapKeepsTheNewStateAndGroupRotation() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, stateCapacity = 3)
+        var valid = true
+        val log = mutableListOf<String>()
+        scheduler.submitState(StateSlot("a", 0)) {
+            valid = false
+            scheduler.submitState(StateSlot("a", 1)) { log += "new" }
+            scheduler.discardInvalid()
+            assertEquals(2, scheduler.pendingStateCount)
+        }
+        scheduler.submitState(StateSlot("a", 1), { valid }) { fail("stale state applied") }
+        scheduler.submitState(StateSlot("b", 0)) { log += "b" }
+        driver.tick()
+        assertEquals(listOf("b"), log)
+        assertEquals(1, scheduler.pendingStateCount)
+        driver.tick()
+        assertEquals(listOf("b", "new"), log)
+        assertEquals(1L, scheduler.counters.staleOperations)
+    }
+
+    @Test fun batchCopiesInputAndKeepsOriginalIndexesAfterDiscard() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 1)
+        val log = mutableListOf<String>()
+        val input = mutableListOf(
+            ScheduledOperation("stale", { false }) { fail("stale command applied") },
+            ScheduledOperation("first") { log += "first" },
+            ScheduledOperation("failure") { error("failed") },
+        )
+        scheduler.submitBatch(input)
+        input.clear()
+        scheduler.discardInvalid()
+        assertEquals(2, scheduler.pendingCommandCount)
+        driver.tick()
+        assertEquals(1, scheduler.pendingCommandCount)
+        driver.tick()
+        assertEquals(listOf("first"), log)
+        assertEquals(2, scheduler.failure!!.operationIndex)
+        assertEquals(1, scheduler.failure!!.appliedInBatch)
+        assertEquals(0, scheduler.pendingCommandCount)
+        assertEquals(3L, scheduler.counters.releasedOperations)
+    }
+
+    @Test fun retainingPauseAndCloseClearAllPendingCounts() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 1)
+        scheduler.submitState("trigger") {
+            scheduler.submitState("target") {}
+            scheduler.submitCommand {}
+            scheduler.pause(clearPending = false)
+        }
+        scheduler.submitState("target") {}
+        scheduler.submitCommand {}
+        driver.tick()
+        assertEquals(1, scheduler.pendingStateCount)
+        assertEquals(2, scheduler.pendingCommandCount)
+        scheduler.close()
+        assertEquals(0, scheduler.pendingStateCount)
+        assertEquals(0, scheduler.pendingCommandCount)
+        assertEquals(0, driver.pendingCount)
+        assertEquals(5L, scheduler.counters.releasedOperations)
+    }
+
+    @Test fun varargBatchMatchesListAdmissionAndFifo() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, commandCapacity = 2, maxOperations = 1)
+        val log = mutableListOf<Int>()
+        assertEquals(SubmitResult.Rejected(RejectionReason.EMPTY_BATCH), scheduler.submitBatch())
+        assertEquals(SubmitResult.Accepted, scheduler.submitBatch(
+            ScheduledOperation { log += 1 }, ScheduledOperation { log += 2 },
+        ))
+        assertEquals(SubmitResult.Rejected(RejectionReason.COMMAND_CAPACITY), scheduler.submitBatch(ScheduledOperation {}))
+        repeat(2) { driver.tick() }
+        assertEquals(listOf(1, 2), log)
+        assertEquals(0, scheduler.pendingCommandCount)
+    }
+
+    @Test fun stateLookupDoesNotScanUnrelatedBindings() {
+        var comparisons = 0
+        class Binding(val id: Int) {
+            override fun hashCode() = id
+            override fun equals(other: Any?): Boolean {
+                comparisons++
+                return other is Binding && id == other.id
+            }
+        }
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 256)
+        var writes = 0
+        repeat(256) { scheduler.submitState(StateSlot(Binding(it), 0)) { writes++ } }
+        comparisons = 0
+        driver.tick()
+        assertEquals(256, writes)
+        assertTrue("unrelated binding comparisons: $comparisons", comparisons < 256 * 8)
+    }
+
+    @Test fun indexedStateGroupsPreserveFullRoundRobinOrder() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 256)
+        val log = mutableListOf<Pair<Int, Int>>()
+        repeat(32) { group ->
+            repeat(8) { property ->
+                scheduler.submitState(StateSlot(group, property)) { log += group to property }
+            }
+        }
+        driver.tick()
+        val expected = (0 until 8).flatMap { property -> (0 until 32).map { group -> group to property } }
+        assertEquals(expected, log)
+        assertEquals(0, scheduler.pendingStateCount)
+        assertEquals(256L, scheduler.counters.appliedOperations)
+    }
 }

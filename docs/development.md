@@ -13,6 +13,41 @@ Python 3.11+ 用于标准库验证脚本，JDK 17 与 Android SDK 配置见 [安
 
 Windows 可用 `gradlew.bat`；遇到 JDK Unix-domain socket 临时目录问题时，可用 `scripts/gradle-local.ps1`，它仅对当前进程设置工程内临时目录。
 
+## 调度器专项测量
+
+不新增生产或基准依赖；探针直接运行当前编译的正式 `UiScheduler`，使用 JDK `ThreadMXBean` 计数当前线程分配：
+
+```sh
+./gradlew :ui-core:schedulerProbe --offline --no-daemon --max-workers=2 --no-configuration-cache
+# 可选：-PprobeWarmup=10000 -PprobeIterations=10000
+```
+
+Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核心合同，再编译 [SchedulerProbe.java](../scripts/performance/SchedulerProbe.java)。CSV 覆盖 16/64/256 个独立状态、同组状态、独立命令和批次，记录每轮提交加一次 drain 的 p50/p95/p99 与分配字节；不包含原生 setter、绘制、跨线程传输或设备调度延迟。输入槽位与批次操作预建，所有实现使用相同夹具；Java 侧还检查 vararg 输入数组在准入后被调用者修改不会改变队列。
+
+对比时保存改前/改后的源码状态和原始输出，在同一 JDK、堆参数、热身/迭代数下多进程交错运行，观察尾延迟及分配，不只挑最快一轮。HotSpot 逃逸分析可能消除临时对象，主机测量不可外推 ART；后台负载也会影响 p95/p99。此探针不是 Android 性能门禁。
+
+为验证兄弟 runtime 的未发布改动，可把审查并核对 SHA-256 的候选 AAR 放入独立空目录，只提取 `classes.jar`，再运行：
+
+```sh
+./gradlew -PenableAndroid=true -PruntimeCandidateClasses=/absolute/path/to/classes.jar \
+  :ui-android-bridge:testRuntimeCandidate --offline --no-daemon --no-configuration-cache
+```
+
+任务先运行固定上游制品的桥合同，再单独把指定 runtime 放在 JVM 测试类路径首位；合同会断言 `FrameScheduler` 实际来自该文件。不会替换 `build/upstream-repo` 的 Maven metadata、pins 或共享仓库。这仅证明“指定新 runtime + 原固定 window + 当前 UI”的主机接口合同，不能当作新 window 或三库设备端到端证据。
+
+只有同时显式提供 Drawable core 候选时，才注册三库联合主机合同：
+
+```sh
+./gradlew -PenableAndroid=true \
+  -PruntimeCandidateClasses=/absolute/path/to/runtime/classes.jar \
+  -PdrawableCandidateJar=/absolute/path/to/meguviz-drawable-core.jar \
+  :ui-android-bridge:jointPipelineProbe --offline --no-daemon --no-configuration-cache
+```
+
+[JointPipelineProbe.java](../scripts/performance/JointPipelineProbe.java) 检查真实候选加载位置、同键准备只执行一次、后台不写 UI、owner 交付后同槽合并、一次上游帧完成有界 drain、缓存命中同步处理和取消清理。它不执行 Android 绘制、不安装设备，也不证明 ART 性能。该探针及其编译任务均不属于默认 `check`/`verifyHost`，不向任何库的生产依赖添加兄弟库；单库用户完全不需要它。
+
+研究依据采用一手资料：[Disruptor 论文（Thompson 等，2011）](https://lmax-exchange.github.io/disruptor/files/Disruptor-1.0.pdf) 关于批量消费和预分配的讨论、[JCTools MPSC 实现](https://github.com/JCTools/JCTools/blob/master/jctools-core/src/main/java/org/jctools/queues/MpscArrayQueue.java) 的单消费者约束、[Go singleflight](https://github.com/golang/sync/blob/master/singleflight/singleflight.go) 的同键结果共享，以及 [Choreographer](https://developer.android.com/reference/android/view/Choreographer) 的 Looper 归属。这些资料用于选择设计与验证方法，不代表本库达到其服务器基准收益；本轮 Exa MCP 授权失败，以上来源为直接阅读，不计为 Exa 检索结果。
+
 ## 验证边界
 
 报告生成在各模块 `build/` 及根目录 `build/reports/`，不提交设备标识或运行回执。API 基线描述本候选的 JVM 公开签名，不是历史稳定版二进制兼容证明。
