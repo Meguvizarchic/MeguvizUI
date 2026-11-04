@@ -19,6 +19,47 @@ dependencies {
     testImplementation(libs.junit)
 }
 dependencyLocking { lockAllConfigurations() }
+
+val runtimeCandidate = providers.gradleProperty("runtimeCandidateClasses")
+if (runtimeCandidate.isPresent) afterEvaluate {
+    val regularTests = tasks.named<Test>("testDebugUnitTest")
+    val candidate = rootProject.file(runtimeCandidate.get())
+    val candidateTests = tasks.register<Test>("testRuntimeCandidate") {
+        group = "verification"
+        description = "Runs bridge contracts with a local runtime candidate first on the JVM classpath."
+        dependsOn(regularTests)
+        inputs.file(candidate)
+        testClassesDirs = regularTests.get().testClassesDirs
+        classpath = files(candidate, regularTests.get().classpath)
+        systemProperty("meguviz.runtime.candidate", candidate.absolutePath)
+        filter { includeTestsMatching("io.github.jichuo1.meguviz.ui.android.AndroidBridgeContractTest") }
+        doFirst { check(candidate.isFile && candidate.extension == "jar") { "runtimeCandidateClasses must name an extracted classes.jar" } }
+    }
+    val drawableCandidate = providers.gradleProperty("drawableCandidateJar")
+    if (drawableCandidate.isPresent) {
+        val drawable = rootProject.file(drawableCandidate.get())
+        val compileJointProbe = tasks.register<JavaCompile>("compileJointPipelineProbe") {
+            dependsOn(candidateTests)
+            source(rootProject.file("scripts/performance/JointPipelineProbe.java"))
+            classpath = files(candidate, drawable, regularTests.map { it.classpath })
+            destinationDirectory.set(layout.buildDirectory.dir("joint-probe/classes"))
+            sourceCompatibility = "17"
+            targetCompatibility = "17"
+            doFirst { check(drawable.isFile && drawable.extension == "jar") { "drawableCandidateJar must name the core candidate jar" } }
+        }
+        tasks.register<JavaExec>("jointPipelineProbe") {
+            group = "verification"
+            description = "Opt-in host contract for Drawable preparation, UI coalescing and one Android frame source."
+            dependsOn(compileJointProbe)
+            classpath = files(compileJointProbe.flatMap { it.destinationDirectory }, candidate, drawable,
+                regularTests.map { it.classpath })
+            mainClass.set("JointPipelineProbe")
+            systemProperty("meguviz.runtime.candidate.uri", candidate.toURI().toURL().toExternalForm())
+            systemProperty("meguviz.drawable.candidate.uri", drawable.toURI().toURL().toExternalForm())
+        }
+    }
+}
+
 publishing {
     repositories { maven { name = "Candidate"; url = rootProject.layout.buildDirectory.dir("repo").get().asFile.toURI() } }
     publications { register<MavenPublication>("release") {

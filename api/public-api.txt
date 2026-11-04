@@ -493,6 +493,9 @@ public final class io.github.jichuo1.meguviz.ui.ViewRef<V extends android.view.V
   public static io.github.jichuo1.meguviz.ui.BindingToken token$default(io.github.jichuo1.meguviz.ui.ViewRef, boolean, int, java.lang.Object);
     descriptor: (Lio/github/jichuo1/meguviz/ui/ViewRef;ZILjava/lang/Object;)Lio/github/jichuo1/meguviz/ui/BindingToken;
 
+  public final <T> io.github.jichuo1.meguviz.ui.PropertyBinding<V, T> bind(io.github.jichuo1.meguviz.ui.PropertySpec<V, T>);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/PropertySpec;)Lio/github/jichuo1/meguviz/ui/PropertyBinding;
+
   public io.github.jichuo1.meguviz.ui.ViewRef(io.github.jichuo1.meguviz.ui.UiSession, long, java.lang.String, io.github.jichuo1.meguviz.ui.ComponentType, kotlin.jvm.internal.DefaultConstructorMarker);
     descriptor: (Lio/github/jichuo1/meguviz/ui/UiSession;JLjava/lang/String;Lio/github/jichuo1/meguviz/ui/ComponentType;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 }
@@ -1011,6 +1014,9 @@ public final class io.github.jichuo1.meguviz.ui.scheduler.UiScheduler implements
 
   public final io.github.jichuo1.meguviz.ui.scheduler.SubmitResult submitBatch(java.util.List<io.github.jichuo1.meguviz.ui.scheduler.ScheduledOperation>);
     descriptor: (Ljava/util/List;)Lio/github/jichuo1/meguviz/ui/scheduler/SubmitResult;
+
+  public final io.github.jichuo1.meguviz.ui.scheduler.SubmitResult submitBatch(io.github.jichuo1.meguviz.ui.scheduler.ScheduledOperation...);
+    descriptor: ([Lio/github/jichuo1/meguviz/ui/scheduler/ScheduledOperation;)Lio/github/jichuo1/meguviz/ui/scheduler/SubmitResult;
 
   public final void pause(boolean);
     descriptor: (Z)V

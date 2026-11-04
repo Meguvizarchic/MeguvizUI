@@ -12,6 +12,24 @@
 
 状态按绑定与属性合并；命令 FIFO 保留次数。有序 batch 保持自身相对顺序，不提供事务或跨通道隔离。失败报告说明阶段及已应用数量；effect 不压制原生 invalidate/requestLayout。
 
+一次绑定，多次提交；只有明确声明 `coalescible=true` 的状态才丢弃同槽中间值。点击、焦点、带业务监听器的写入等命令不得为性能而自动合并。需要显式先后关系时使用批次：
+
+```kotlin
+// 当前源码新增成员简写，仍由所属 session 完整校验所有权和生命周期。
+val title = titleRef.bind(Properties.plainText())
+title.submit("Ready")
+
+// 以下便利重载属于当前源码改动，尚未发布；已发布 1.0.0 仍使用 listOf(...) 形式。
+session.scheduler.submitBatch(
+    title.operation("Saved"),
+    ScheduledOperation("focus") { editorRef.get().requestFocus(); Unit },
+)
+```
+
+示例中的 `Properties` 来自 `io.github.jichuo1.meguviz.ui.widgets`，`ScheduledOperation` 来自 `io.github.jichuo1.meguviz.ui.scheduler`。`ViewRef.bind(property)` 是 `session.bind(ref, property)` 的纯委托成员，Java 与 Kotlin 都可直接调用，属性冲突、关闭或失效引用仍由同一入口拒绝；已发布 1.0.0 使用原 session 入口。原 `submitBatch(List<ScheduledOperation>)` 保留；两种入口都复制输入、整体准入或拒绝，并在每项执行前复核有效性。检查返回的 `SubmitResult`，不要忽略容量、暂停或关闭引起的拒绝。
+
+状态组在帧开始建立索引，按组公平轮转，取项不再逐次扫描全部状态；命令按数组游标消费，已执行或失效项立即清空引用。快路径不绕过 validity、错误报告、容量、生命周期或时间预算。
+
 ## 生命周期与调度
 
 View 与会话操作在主线程执行。detach 使旧 attach token 失效并清理待更新引用；rebind 先失效旧绑定。close 禁止新提交，关闭调度并释放绑定、监听与受管子树，清理失败仍继续释放其他资源。`requestClose()` 区分后台请求与 owner 清理完成。

@@ -11,7 +11,7 @@ internal class LatestWork<I, O>(
     private val apply: (I, O) -> Unit,
     private val failed: (Throwable) -> Unit,
 ) : AutoCloseable {
-    private class Work<I>(val value: I)
+    private class Work<I>(var value: I)
     private val ownerThread = Thread.currentThread()
     private var running: Work<I>? = null
     private var pending: Work<I>? = null
@@ -20,13 +20,20 @@ internal class LatestWork<I, O>(
 
     fun submit(value: I) {
         check(Thread.currentThread() === ownerThread) { "Owner thread required" }
-        val work = Work(value)
         val start = synchronized(this) {
             dispatchFailure?.let { throw IllegalStateException("Owner dispatcher failed; controller is closed", it) }
             check(!closed) { "List controller closed" }
-            if (running != null) { pending = work; false } else { running = work; true }
+            if (running != null) {
+                // Keep the pending slot and only replace its value: a superseded submission never
+                // runs, so its Work (and anything the value retains) need not be allocated again.
+                val slot = pending
+                if (slot != null) slot.value = value else pending = Work(value)
+                null
+            } else {
+                Work(value).also { running = it }
+            }
         }
-        if (start) launch(work)
+        if (start != null) launch(start)
     }
 
     private fun launch(work: Work<I>) {

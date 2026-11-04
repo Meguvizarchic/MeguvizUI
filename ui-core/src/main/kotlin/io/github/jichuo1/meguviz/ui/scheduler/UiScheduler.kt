@@ -55,12 +55,125 @@ class UiScheduler(
     val maxFrameWorkNanos: Long = 2_000_000,
     private val nanoTime: () -> Long = System::nanoTime,
 ) : AutoCloseable {
-    private data class IndexedOperation(val index: Int, val operation: ScheduledOperation)
-    private class Batch(operations: List<ScheduledOperation>) {
-        val operations = ArrayDeque(operations.mapIndexed(::IndexedOperation))
+    private class Batch(val operations: Array<ScheduledOperation?>) {
         var applied = 0
-        val remaining: Int get() = operations.size
+        var cursor = 0
+        var remaining = operations.size
+            private set
+
+        fun remove(index: Int) {
+            operations[index] = null
+            remaining--
+        }
+
+        fun clear() {
+            operations.fill(null)
+            remaining = 0
+        }
     }
+
+    /**
+     * Reusable open-addressing group table. Group ids are assigned in insertion order, so
+     * [keyAt] iterates groups in the same order as the previous LinkedHashMap implementation.
+     * Only these index buffers are reused across frames; the state/command queues are separate.
+     */
+    private class GroupTable(
+        initialCapacity: Int = 16,
+        private val maxCapacity: Int = initialCapacity,
+    ) {
+        var keys: Array<Any?> = arrayOfNulls(initialCapacity)
+        var ids: IntArray = IntArray(initialCapacity)
+        var head: IntArray = IntArray(initialCapacity)
+        var tail: IntArray = IntArray(initialCapacity)
+        var groupKeys: Array<Any?> = arrayOfNulls(initialCapacity)
+        var mark: BooleanArray = BooleanArray(initialCapacity)
+        var size = 0
+            private set
+        private var capacity = initialCapacity
+        private var mask = initialCapacity - 1
+
+        fun clear() {
+            keys.fill(null)
+            groupKeys.fill(null, 0, size)
+            size = 0
+        }
+
+        fun groupId(key: Any): Int {
+            var index = key.hashCode() and mask
+            var probes = 0
+            while (probes++ < capacity) {
+                val existing = keys[index]
+                if (existing == null) return -1
+                if (existing == key) return ids[index] - 1
+                index = (index + 1) and mask
+            }
+            return -1
+        }
+
+        fun groupIdOrInsert(key: Any): Int {
+            var index = key.hashCode() and mask
+            var probes = 0
+            while (probes++ < capacity) {
+                val existing = keys[index]
+                if (existing == null) {
+                    if (size * 4 >= capacity * 3) {
+                        grow()
+                        return groupIdOrInsert(key)
+                    }
+                    val id = size++
+                    keys[index] = key
+                    ids[index] = id + 1
+                    groupKeys[id] = key
+                    head[id] = -1
+                    tail[id] = -1
+                    return id
+                }
+                if (existing == key) return ids[index] - 1
+                index = (index + 1) and mask
+            }
+            // Unreachable while the table stays below 75% load; fail closed rather than loop.
+            throw IllegalStateException("group table is full")
+        }
+
+        fun keyAt(id: Int): Any = groupKeys[id]!!
+
+        private fun grow() {
+            val newCapacity = capacity * 2
+            if (newCapacity <= 0 || newCapacity > maxCapacity) throw IllegalStateException("group table exceeded its bound")
+            val oldKeys = keys
+            val oldIds = ids
+            val oldHead = head
+            val oldTail = tail
+            val oldGroupKeys = groupKeys
+            val oldSize = size
+            keys = arrayOfNulls(newCapacity)
+            ids = IntArray(newCapacity)
+            head = IntArray(newCapacity)
+            tail = IntArray(newCapacity)
+            groupKeys = arrayOfNulls(newCapacity)
+            mark = BooleanArray(newCapacity)
+            capacity = newCapacity
+            mask = newCapacity - 1
+            for (id in 0 until oldSize) {
+                head[id] = oldHead[id]
+                tail[id] = oldTail[id]
+                groupKeys[id] = oldGroupKeys[id]
+            }
+            for (index in oldKeys.indices) {
+                val key = oldKeys[index] ?: continue
+                var slot = key.hashCode() and mask
+                while (keys[slot] != null) slot = (slot + 1) and mask
+                keys[slot] = key
+                ids[slot] = oldIds[index]
+            }
+        }
+    }
+
+    private class StateIndex(
+        var slots: Array<Any?>,
+        var next: IntArray,
+        var groups: GroupTable,
+    )
 
     private var states = linkedMapOf<Any, ScheduledOperation>()
     private var driver: UiFrameDriver? = driver
@@ -68,7 +181,13 @@ class UiScheduler(
     private var frameStates: LinkedHashMap<Any, ScheduledOperation>? = null
     private var frameCommands: ArrayDeque<Batch>? = null
     private var frameGroups: ArrayDeque<Any>? = null
+    private var frameIndex: StateIndex? = null
+    private var spareIndex: StateIndex? = null
+    private var spareStates: LinkedHashMap<Any, ScheduledOperation>? = null
+    private var spareCommands: ArrayDeque<Batch>? = null
     private var nextStateGroups = ArrayDeque<Any>()
+    private var overlappingStates = 0
+    private var pendingCommands = 0
     private var pendingTicket: FrameTicket? = null
     private var frameIdentity: Any? = null
     private var requestingFrame = false
@@ -101,14 +220,13 @@ class UiScheduler(
     val pendingStateCount: Int
         get() {
             assertOwner()
-            val active = frameStates ?: return states.size
-            return active.size + states.keys.count { !active.containsKey(it) }
+            return states.size + (frameStates?.size ?: 0) - overlappingStates
         }
 
     val pendingCommandCount: Int
         get() {
             assertOwner()
-            return commands.sumOf { it.remaining } + (frameCommands?.sumOf { it.remaining } ?: 0)
+            return pendingCommands
         }
 
     val counters: SchedulerCounters
@@ -125,6 +243,7 @@ class UiScheduler(
             return reject(RejectionReason.STATE_CAPACITY)
         }
         val previous = states.put(slot, ScheduledOperation("state", isValid, action))
+        if (previous == null && frameStates?.containsKey(slot) == true) overlappingStates++
         accepted++
         if (previous != null) {
             coalesced++
@@ -134,16 +253,36 @@ class UiScheduler(
         return if (replacing) SubmitResult.Coalesced else SubmitResult.Accepted
     }
 
-    fun submitCommand(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult =
-        submitBatch(listOf(ScheduledOperation("command", isValid, action)))
+    fun submitCommand(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
+        assertOwner()
+        rejectionForState()?.let { return reject(it) }
+        if (pendingCommands >= commandCapacity) return reject(RejectionReason.COMMAND_CAPACITY)
+        return enqueue(Batch(arrayOf(ScheduledOperation("command", isValid, action))))
+    }
 
     /** Entire batch admission is atomic; applying the admitted batch is deliberately not a transaction. */
     fun submitBatch(operations: List<ScheduledOperation>): SubmitResult {
         assertOwner()
         rejectionForState()?.let { return reject(it) }
         if (operations.isEmpty()) return reject(RejectionReason.EMPTY_BATCH)
-        if (operations.size > commandCapacity - pendingCommandCount) return reject(RejectionReason.COMMAND_CAPACITY)
-        commands.addLast(Batch(operations.toList()))
+        if (operations.size > commandCapacity - pendingCommands) return reject(RejectionReason.COMMAND_CAPACITY)
+        return enqueue(Batch(operations.toTypedArray<ScheduledOperation?>()))
+    }
+
+    /** Convenience overload with the same admission, snapshot and FIFO contract as the list form. */
+    fun submitBatch(vararg operations: ScheduledOperation): SubmitResult {
+        assertOwner()
+        rejectionForState()?.let { return reject(it) }
+        if (operations.isEmpty()) return reject(RejectionReason.EMPTY_BATCH)
+        if (operations.size > commandCapacity - pendingCommands) return reject(RejectionReason.COMMAND_CAPACITY)
+        val snapshot = arrayOfNulls<ScheduledOperation>(operations.size)
+        operations.copyInto(snapshot)
+        return enqueue(Batch(snapshot))
+    }
+
+    private fun enqueue(batch: Batch): SubmitResult {
+        commands.addLast(batch)
+        pendingCommands += batch.remaining
         accepted++
         requestIfNeeded()
         return SubmitResult.Accepted
@@ -183,6 +322,8 @@ class UiScheduler(
                 if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
                 val valid = checkPending(operation, 0, 0) ?: return
                 if (!valid && queue[slot] === operation) {
+                    val other = if (queue === states) frameStates else states
+                    if (other?.containsKey(slot) == true) overlappingStates--
                     queue.remove(slot)
                     stale++
                     released++
@@ -191,10 +332,13 @@ class UiScheduler(
         }
         for (queue in listOfNotNull(commands, frameCommands)) {
             for (batch in queue.toList()) {
-                for (item in batch.operations.toList()) {
+                for (index in batch.cursor until batch.operations.size) {
                     if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
-                    val valid = checkPending(item.operation, item.index, batch.applied) ?: return
-                    if (!valid && queue.contains(batch) && batch.operations.remove(item)) {
+                    val operation = batch.operations[index] ?: continue
+                    val valid = checkPending(operation, index, batch.applied) ?: return
+                    if (!valid && queue.contains(batch) && batch.operations[index] === operation) {
+                        batch.remove(index)
+                        pendingCommands--
                         stale++
                         released++
                     }
@@ -269,12 +413,24 @@ class UiScheduler(
         drained++
         frameStates = states
         frameCommands = commands
-        val groups = states.keys.map(::stateGroup).distinct()
-        val retainedOrder = nextStateGroups.filter { it in groups }
-        frameGroups = ArrayDeque(retainedOrder + groups.filter { it !in retainedOrder })
-        nextStateGroups.clear()
-        states = linkedMapOf()
-        commands = ArrayDeque()
+        // A command-only frame has no snapshot to index; skip the state index entirely.
+        val index = if (states.isEmpty()) null else indexStates(states)
+        frameIndex = index
+        val previousGroups = nextStateGroups
+        val ordered = if (index == null) {
+            previousGroups.clear()
+            previousGroups
+        } else {
+            orderedGroups(previousGroups, index)
+        }
+        frameGroups = ordered
+        if (ordered !== previousGroups) previousGroups.clear()
+        val incomingStates = spareStates ?: linkedMapOf()
+        spareStates = null
+        val incomingCommands = spareCommands ?: ArrayDeque()
+        spareCommands = null
+        states = incomingStates
+        commands = incomingCommands
         val started = nanoTime()
         var operationCount = 0
         try {
@@ -292,23 +448,37 @@ class UiScheduler(
         } finally {
             if (state == SchedulerState.ACTIVE || state == SchedulerState.PAUSED) {
                 val remainingStates = frameStates!!
-                states.forEach { (key, operation) ->
+                incomingStates.forEach { (key, operation) ->
                     if (remainingStates.put(key, operation) != null) {
                         coalesced++
                         released++
                     }
                 }
                 states = remainingStates
-                val remainingGroups = states.keys.map(::stateGroup).distinct()
-                val retainedGroups = frameGroups!!.filter { it in remainingGroups }
-                nextStateGroups = ArrayDeque(retainedGroups + remainingGroups.filter { it !in retainedGroups })
+                val remainingGroups = if (states.isEmpty()) emptySet() else states.keys.mapTo(linkedSetOf(), ::stateGroup)
+                nextStateGroups = orderedGroups(frameGroups!!, remainingGroups)
                 val remainingCommands = frameCommands!!
-                remainingCommands.addAll(commands)
+                remainingCommands.addAll(incomingCommands)
                 commands = remainingCommands
+            } else {
+                states = frameStates ?: linkedMapOf()
+                commands = frameCommands ?: ArrayDeque()
+            }
+            incomingStates.clear()
+            incomingCommands.clear()
+            spareStates = incomingStates
+            spareCommands = incomingCommands
+            if (index != null) {
+                // Drop object references; only the primitive capacities are retained.
+                index.slots.fill(null)
+                index.groups.clear()
+                spareIndex = index
             }
             frameStates = null
             frameCommands = null
             frameGroups = null
+            frameIndex = null
+            overlappingStates = 0
             draining = false
             requestIfNeeded()
         }
@@ -319,9 +489,19 @@ class UiScheduler(
         val groups = frameGroups!!
         while (groups.isNotEmpty()) {
             val group = groups.removeFirst()
-            val slot = queue.keys.firstOrNull { stateGroup(it) == group } ?: continue
+            val index = frameIndex ?: return
+            val id = index.groups.groupId(group)
+            if (id < 0) continue
+            var head = index.groups.head[id]
+            while (head >= 0 && !queue.containsKey(index.slots[head]!!)) head = index.next[head]
+            if (head < 0) continue
+            val slot = index.slots[head]!!
+            index.groups.head[id] = index.next[head]
             val operation = queue.remove(slot)!!
-            if (queue.keys.any { stateGroup(it) == group }) groups.addLast(group)
+            if (states.containsKey(slot)) overlappingStates--
+            head = index.groups.head[id]
+            while (head >= 0 && !queue.containsKey(index.slots[head]!!)) head = index.next[head]
+            if (head >= 0) groups.addLast(group)
             apply(operation, 0, 0)
             return
         }
@@ -329,12 +509,90 @@ class UiScheduler(
 
     private fun stateGroup(slot: Any): Any = if (slot is StateSlot) slot.binding else slot
 
+    /** Smallest power-of-two capacity that keeps the table below 75% load for [stateCapacity] groups. */
+    private fun groupTableBound(): Int {
+        val required = (stateCapacity.toLong() + stateCapacity / 3 + 1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        var bound = 16
+        while (bound < required && bound < (1 shl 30)) bound = bound shl 1
+        return bound
+    }
+
+    private fun indexStates(queue: Map<Any, ScheduledOperation>): StateIndex {
+        val index = spareIndex ?: StateIndex(emptyArray(), IntArray(0), GroupTable(16, groupTableBound()))
+        spareIndex = null
+        val count = queue.size
+        if (index.slots.size < count) {
+            index.slots = arrayOfNulls(count)
+            index.next = IntArray(count) { -1 }
+        } else {
+            index.next.fill(-1, 0, count)
+            if (index.slots.size > count) index.slots.fill(null, count, index.slots.size)
+        }
+        index.groups.clear()
+        var slotIndex = 0
+        for (slot in queue.keys) {
+            index.slots[slotIndex] = slot
+            val group = stateGroup(slot)
+            val id = index.groups.groupIdOrInsert(group)
+            if (index.groups.head[id] < 0) index.groups.head[id] = slotIndex
+            else index.next[index.groups.tail[id]] = slotIndex
+            index.groups.tail[id] = slotIndex
+            slotIndex++
+        }
+        return index
+    }
+
+    private fun orderedGroups(previous: ArrayDeque<Any>, index: StateIndex): ArrayDeque<Any> {
+        val groupCount = index.groups.size
+        if (groupCount == 0) {
+            previous.clear()
+            return previous
+        }
+        if (previous.isEmpty()) {
+            for (id in 0 until groupCount) previous.addLast(index.groups.keyAt(id))
+            return previous
+        }
+        val marked = index.groups.mark
+        val ordered = ArrayDeque<Any>(groupCount)
+        for (group in previous) {
+            val id = index.groups.groupId(group)
+            if (id >= 0 && !marked[id]) {
+                marked[id] = true
+                ordered.addLast(group)
+            }
+        }
+        for (id in 0 until groupCount) {
+            if (marked[id]) marked[id] = false else ordered.addLast(index.groups.keyAt(id))
+        }
+        return ordered
+    }
+
+    private fun orderedGroups(previous: ArrayDeque<Any>, current: Set<Any>): ArrayDeque<Any> {
+        if (current.isEmpty()) {
+            previous.clear()
+            return previous
+        }
+        if (previous.isEmpty()) {
+            previous.addAll(current)
+            return previous
+        }
+        val remaining = current.toMutableSet()
+        val ordered = ArrayDeque<Any>()
+        for (group in previous) if (remaining.remove(group)) ordered.addLast(group)
+        ordered.addAll(remaining)
+        return ordered
+    }
+
     private fun applyCommand() {
         val queue = frameCommands!!
         val batch = queue.first
-        val item = batch.operations.removeFirst()
+        while (batch.operations[batch.cursor] == null) batch.cursor++
+        val index = batch.cursor++
+        val operation = batch.operations[index]!!
+        batch.remove(index)
+        pendingCommands--
         if (batch.remaining == 0) queue.removeFirst()
-        if (apply(item.operation, item.index, batch.applied)) batch.applied++
+        if (apply(operation, index, batch.applied)) batch.applied++
     }
 
     private fun apply(operation: ScheduledOperation, index: Int, appliedInBatch: Int): Boolean {
@@ -379,13 +637,23 @@ class UiScheduler(
     }
 
     private fun clearQueues() {
-        released += states.size + commands.sumOf { it.remaining }
-        released += (frameStates?.size ?: 0) + (frameCommands?.sumOf { it.remaining } ?: 0)
+        released += states.size + (frameStates?.size ?: 0) + pendingCommands
         states.clear()
+        commands.forEach { it.clear() }
         commands.clear()
         frameStates?.clear()
+        frameCommands?.forEach { it.clear() }
         frameCommands?.clear()
         frameGroups?.clear()
+        frameIndex = null
         nextStateGroups.clear()
+        overlappingStates = 0
+        pendingCommands = 0
+        spareStates?.clear()
+        spareStates = null
+        spareCommands?.forEach { it.clear() }
+        spareCommands?.clear()
+        spareCommands = null
+        spareIndex = null
     }
 }

@@ -61,4 +61,10 @@ class ViewRef<V : View> internal constructor(
     /** Owner thread only; fails after this node or its session is released. */
     fun get(): V = session.resolve(this)
     fun token(resources: Boolean = false): BindingToken = session.token(this, resources)
+
+    /**
+     * Fluent shorthand for [UiSession.bind] on the owning session. The delegate performs the exact
+     * active/resolve/property-conflict checks and cleanup registration; no lifecycle step is skipped.
+     */
+    fun <T> bind(property: PropertySpec<V, T>): PropertyBinding<V, T> = session.bind(this, property)
 }
