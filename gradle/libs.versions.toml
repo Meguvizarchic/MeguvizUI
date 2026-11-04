@@ -1,4 +1,6 @@
 [versions]
+# Keep the reviewed AGP/Kotlin toolchain fixed; newer-release notices are not compatibility failures.
+#noinspection AndroidGradlePluginVersion
 agp = "9.4.1"
 kotlin = "2.4.21"
 ksp = "2.3.12"
