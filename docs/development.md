@@ -19,10 +19,15 @@ Windows 可用 `gradlew.bat`；遇到 JDK Unix-domain socket 临时目录问题�
 
 ```sh
 ./gradlew :ui-core:schedulerProbe --offline --no-daemon --max-workers=2 --no-configuration-cache
+./gradlew :ui-core:schedulerProbeV2 --offline --no-daemon --max-workers=2 --no-configuration-cache
 # 可选：-PprobeWarmup=10000 -PprobeIterations=10000
 ```
 
 Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核心合同，再编译 [SchedulerProbe.java](../scripts/performance/SchedulerProbe.java)。CSV 覆盖 16/64/256 个独立状态、同组状态、独立命令和批次，记录每轮提交加一次 drain 的 p50/p95/p99 与分配字节；不包含原生 setter、绘制、跨线程传输或设备调度延迟。输入槽位与批次操作预建，所有实现使用相同夹具；Java 侧还检查 vararg 输入数组在准入后被调用者修改不会改变队列。
+
+第二轮的 [SchedulerProbeV2.java](../scripts/performance/SchedulerProbeV2.java) 另列提交加 drain、仅 drain、部分 drain 和重入场景，并在计量前核验 FIFO、合并、公平与故障恢复。调度器复用的是实例私有的组索引与空闲队列缓冲，帧结束清掉 binding、slot 和闭包引用；命令-only 帧跳过状态索引。不能据此把整个调度链称为零分配。
+
+相对固定基线 `dee57b5`，同一 JDK 17 主机夹具的 256 状态每轮分配约 40,546 → 16,467 B；仅 state drain 场景约 24,096 → 14–15 B。每轮包含的工作不同，不能跨两行直接比较；这是探索性 HotSpot 分配结果，不是 ART、帧耗时或设备性能承诺。完整正确性还由容量 13、哈希碰撞、相等不同实例、公平轮转、重入与索引清引用合同锁定。
 
 对比时保存改前/改后的源码状态和原始输出，在同一 JDK、堆参数、热身/迭代数下多进程交错运行，观察尾延迟及分配，不只挑最快一轮。HotSpot 逃逸分析可能消除临时对象，主机测量不可外推 ART；后台负载也会影响 p95/p99。此探针不是 Android 性能门禁。
 

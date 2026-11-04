@@ -90,4 +90,94 @@ class LatestWorkTest {
         background.run()
         assertThrows(IllegalStateException::class.java) { work.submit(2) }
     }
+
+    @Test fun pendingSlotIsReusedAndOnlyLatestValueRuns() {
+        val background = Queue()
+        val owner = Queue()
+        val calculated = mutableListOf<Int>()
+        val committed = mutableListOf<Int>()
+        val work = LatestWork(background, owner, { n: Int -> calculated += n; n * 2 }, { _, n -> committed += n }, { throw it })
+        work.submit(1); work.submit(2); work.submit(3)
+        assertEquals(1, background.tasks.size)
+        background.runBackground(); owner.run()
+        assertEquals(listOf(1), calculated)
+        background.runBackground(); owner.run()
+        assertEquals(listOf(1, 3), calculated)
+        assertEquals(listOf(6), committed)
+    }
+
+    @Test fun failedComputeDoesNotBreakPending() {
+        val background = Queue()
+        val owner = Queue()
+        val applied = mutableListOf<Int>()
+        val work = LatestWork<Int, Int>(background, owner, { n: Int ->
+            if (n == 1) throw IllegalStateException("boom") else n
+        }, { _, n -> applied += n }, { throw it })
+        work.submit(1); work.submit(2)
+        background.runBackground(); owner.run()
+        background.runBackground(); owner.run()
+        assertEquals(listOf(2), applied)
+    }
+
+    @Test fun repeatedStormsStayBoundedAndConverge() {
+        val background = Queue()
+        val owner = Queue()
+        val applied = mutableListOf<Int>()
+        val work = LatestWork<Int, Int>(background, owner, { it }, { _, n -> applied += n }, { throw it })
+        repeat(5) { storm ->
+            val base = storm * 1000
+            repeat(200) { work.submit(base + it) }
+            assertEquals(1, background.tasks.size)
+            background.runBackground(); owner.run()
+            background.runBackground(); owner.run()
+            assertEquals(base + 199, applied.last())
+        }
+    }
+
+    @Test fun closeAfterRepeatedStormsDropsEverything() {
+        val background = Queue()
+        val owner = Queue()
+        val applied = mutableListOf<Int>()
+        val work = LatestWork<Int, Int>(background, owner, { it }, { _, n -> applied += n }, { throw it })
+        repeat(3) { storm ->
+            repeat(100) { work.submit(storm * 100 + it) }
+            background.runBackground(); owner.run()
+            background.runBackground(); owner.run()
+        }
+        work.submit(1); work.submit(2); work.close()
+        background.runBackground(); owner.run()
+        assertEquals(3, applied.size)
+        assertThrows(IllegalStateException::class.java) { work.submit(3) }
+    }
+
+    @Test fun submitRequiresOwnerThread() {
+        val background = Queue()
+        val owner = Queue()
+        val work = LatestWork<Int, Int>(background, owner, { it }, { _, _ -> }, { throw it })
+        val failures = mutableListOf<Throwable>()
+        val thread = Thread { try { work.submit(1) } catch (error: Throwable) { failures += error } }
+        thread.start(); thread.join()
+        assertTrue(failures.single() is IllegalStateException)
+    }
+
+    @Test fun snapshotInputStaysBoundedAndFailureDoesNotDisturbPending() {
+        val background = Queue()
+        val owner = Queue()
+        val applied = mutableListOf<List<Int>>()
+        val work = LatestWork<List<Int>, List<Int>>(background, owner, { it }, { _, n -> applied += n }, { throw it })
+        val input = mutableListOf(1, 2, 3)
+        // Test-side simulation of the adapter's snapshot: copy first, then submit. A throwing
+        // snapshot never reaches submit, so the pending slot is left untouched.
+        fun submitSnapshot(source: List<Int>, fail: Boolean = false) {
+            if (fail) throw IllegalStateException("snapshot boom")
+            work.submit(ArrayList(source))
+        }
+        submitSnapshot(input)
+        submitSnapshot(input)
+        input.clear(); input.add(9)
+        assertThrows(IllegalStateException::class.java) { submitSnapshot(input, fail = true) }
+        background.runBackground(); owner.run()
+        background.runBackground(); owner.run()
+        assertEquals(listOf(listOf(1, 2, 3)), applied)
+    }
 }

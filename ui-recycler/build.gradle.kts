@@ -21,6 +21,26 @@ dependencies {
     testImplementation(libs.junit)
 }
 dependencyLocking { lockAllConfigurations() }
+
+afterEvaluate {
+    val unitTests = tasks.named<Test>("testDebugUnitTest")
+    val compileProbe = tasks.register<JavaCompile>("compileLatestWorkProbe") {
+        dependsOn(unitTests)
+        source(rootProject.file("scripts/performance/LatestWorkProbe.java"))
+        classpath = files(unitTests.map { it.classpath })
+        destinationDirectory.set(layout.buildDirectory.dir("latest-work-probe/classes"))
+        sourceCompatibility = "17"
+        targetCompatibility = "17"
+    }
+    tasks.register<JavaExec>("latestWorkProbe") {
+        group = "verification"
+        description = "Measures host-only bounded latest-work admission allocation; not an Android performance gate."
+        dependsOn(compileProbe)
+        classpath = files(compileProbe.flatMap { it.destinationDirectory }, unitTests.map { it.classpath })
+        mainClass.set("LatestWorkProbe")
+    }
+}
+
 publishing {
     repositories { maven { name = "Candidate"; url = rootProject.layout.buildDirectory.dir("repo").get().asFile.toURI() } }
     publications { register<MavenPublication>("release") {

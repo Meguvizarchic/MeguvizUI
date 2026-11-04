@@ -205,7 +205,7 @@ class ContractInstrumentation : Instrumentation() {
                 try {
                     val ref = FrameScope(session, FrameLayout(targetContext)).text(ViewKey("text"), frameParams())
                     session.reserveProperties(ref, setOf("background"))
-                    fails { session.bind(ref, PropertySpec<TextView, Int>("background", write = { view, color -> view.setBackgroundColor(color) })) }
+                    fails { ref.bind(PropertySpec<TextView, Int>("background", write = { view, color -> view.setBackgroundColor(color) })) }
                 } finally { session.close() }
             },
             "restoration_ids_bundle_roundtrip" to {
@@ -221,8 +221,9 @@ class ContractInstrumentation : Instrumentation() {
             "dispose_releases_owned_tree_and_rejects_commits" to {
                 val driver = Driver(); val session = UiSession(CreationEnvironment(targetContext), driver)
                 val root = FrameLayout(targetContext); val ref = FrameScope(session, root).text(ViewKey("text"), frameParams())
-                session.bind(ref, Properties.plainText()).submit("queued"); session.close(); session.close(); driver.tick()
+                ref.bind(Properties.plainText()).submit("queued"); session.close(); session.close(); driver.tick()
                 check(root.childCount == 0 && session.scheduler.pendingStateCount == 0)
+                fails { ref.bind(Properties.plainText()) }
                 fails { ref.get() }
             },
             "resolved_provider_10000_updates_no_rescan" to {

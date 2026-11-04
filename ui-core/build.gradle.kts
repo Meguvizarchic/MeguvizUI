@@ -48,6 +48,25 @@ afterEvaluate {
         args(providers.gradleProperty("probeWarmup").getOrElse("2000"),
             providers.gradleProperty("probeIterations").getOrElse("4000"))
     }
+    val compileProbeV2 = tasks.register<JavaCompile>("compileSchedulerProbeV2") {
+        dependsOn(unitTests)
+        source(rootProject.file("scripts/performance/SchedulerProbeV2.java"))
+        classpath = files(unitTests.map { it.classpath })
+        destinationDirectory.set(layout.buildDirectory.dir("scheduler-probe-v2/classes"))
+        sourceCompatibility = "17"
+        targetCompatibility = "17"
+    }
+    tasks.register<JavaExec>("schedulerProbeV2") {
+        group = "verification"
+        description = "Measures host frame-drain buffers, fairness and reentry; not an Android performance gate."
+        dependsOn(compileProbeV2)
+        classpath = files(compileProbeV2.flatMap { it.destinationDirectory }, unitTests.map { it.classpath })
+        mainClass.set("SchedulerProbeV2")
+        minHeapSize = "256m"
+        maxHeapSize = "256m"
+        args(providers.gradleProperty("probeWarmup").getOrElse("2000"),
+            providers.gradleProperty("probeIterations").getOrElse("4000"))
+    }
 }
 
 publishing {

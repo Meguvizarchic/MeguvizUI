@@ -72,8 +72,108 @@ class UiScheduler(
         }
     }
 
-    private class StateGroup(var head: Int, var tail: Int)
-    private class StateIndex(val slots: Array<Any>, val next: IntArray, val groups: Map<Any, StateGroup>)
+    /**
+     * Reusable open-addressing group table. Group ids are assigned in insertion order, so
+     * [keyAt] iterates groups in the same order as the previous LinkedHashMap implementation.
+     * Only these index buffers are reused across frames; the state/command queues are separate.
+     */
+    private class GroupTable(
+        initialCapacity: Int = 16,
+        private val maxCapacity: Int = initialCapacity,
+    ) {
+        var keys: Array<Any?> = arrayOfNulls(initialCapacity)
+        var ids: IntArray = IntArray(initialCapacity)
+        var head: IntArray = IntArray(initialCapacity)
+        var tail: IntArray = IntArray(initialCapacity)
+        var groupKeys: Array<Any?> = arrayOfNulls(initialCapacity)
+        var mark: BooleanArray = BooleanArray(initialCapacity)
+        var size = 0
+            private set
+        private var capacity = initialCapacity
+        private var mask = initialCapacity - 1
+
+        fun clear() {
+            keys.fill(null)
+            groupKeys.fill(null, 0, size)
+            size = 0
+        }
+
+        fun groupId(key: Any): Int {
+            var index = key.hashCode() and mask
+            var probes = 0
+            while (probes++ < capacity) {
+                val existing = keys[index]
+                if (existing == null) return -1
+                if (existing == key) return ids[index] - 1
+                index = (index + 1) and mask
+            }
+            return -1
+        }
+
+        fun groupIdOrInsert(key: Any): Int {
+            var index = key.hashCode() and mask
+            var probes = 0
+            while (probes++ < capacity) {
+                val existing = keys[index]
+                if (existing == null) {
+                    if (size * 4 >= capacity * 3) {
+                        grow()
+                        return groupIdOrInsert(key)
+                    }
+                    val id = size++
+                    keys[index] = key
+                    ids[index] = id + 1
+                    groupKeys[id] = key
+                    head[id] = -1
+                    tail[id] = -1
+                    return id
+                }
+                if (existing == key) return ids[index] - 1
+                index = (index + 1) and mask
+            }
+            // Unreachable while the table stays below 75% load; fail closed rather than loop.
+            throw IllegalStateException("group table is full")
+        }
+
+        fun keyAt(id: Int): Any = groupKeys[id]!!
+
+        private fun grow() {
+            val newCapacity = capacity * 2
+            if (newCapacity <= 0 || newCapacity > maxCapacity) throw IllegalStateException("group table exceeded its bound")
+            val oldKeys = keys
+            val oldIds = ids
+            val oldHead = head
+            val oldTail = tail
+            val oldGroupKeys = groupKeys
+            val oldSize = size
+            keys = arrayOfNulls(newCapacity)
+            ids = IntArray(newCapacity)
+            head = IntArray(newCapacity)
+            tail = IntArray(newCapacity)
+            groupKeys = arrayOfNulls(newCapacity)
+            mark = BooleanArray(newCapacity)
+            capacity = newCapacity
+            mask = newCapacity - 1
+            for (id in 0 until oldSize) {
+                head[id] = oldHead[id]
+                tail[id] = oldTail[id]
+                groupKeys[id] = oldGroupKeys[id]
+            }
+            for (index in oldKeys.indices) {
+                val key = oldKeys[index] ?: continue
+                var slot = key.hashCode() and mask
+                while (keys[slot] != null) slot = (slot + 1) and mask
+                keys[slot] = key
+                ids[slot] = oldIds[index]
+            }
+        }
+    }
+
+    private class StateIndex(
+        var slots: Array<Any?>,
+        var next: IntArray,
+        var groups: GroupTable,
+    )
 
     private var states = linkedMapOf<Any, ScheduledOperation>()
     private var driver: UiFrameDriver? = driver
@@ -82,6 +182,9 @@ class UiScheduler(
     private var frameCommands: ArrayDeque<Batch>? = null
     private var frameGroups: ArrayDeque<Any>? = null
     private var frameIndex: StateIndex? = null
+    private var spareIndex: StateIndex? = null
+    private var spareStates: LinkedHashMap<Any, ScheduledOperation>? = null
+    private var spareCommands: ArrayDeque<Batch>? = null
     private var nextStateGroups = ArrayDeque<Any>()
     private var overlappingStates = 0
     private var pendingCommands = 0
@@ -310,12 +413,24 @@ class UiScheduler(
         drained++
         frameStates = states
         frameCommands = commands
-        val index = indexStates(states)
+        // A command-only frame has no snapshot to index; skip the state index entirely.
+        val index = if (states.isEmpty()) null else indexStates(states)
         frameIndex = index
-        frameGroups = orderedGroups(nextStateGroups, index.groups.keys)
-        nextStateGroups.clear()
-        states = linkedMapOf()
-        commands = ArrayDeque()
+        val previousGroups = nextStateGroups
+        val ordered = if (index == null) {
+            previousGroups.clear()
+            previousGroups
+        } else {
+            orderedGroups(previousGroups, index)
+        }
+        frameGroups = ordered
+        if (ordered !== previousGroups) previousGroups.clear()
+        val incomingStates = spareStates ?: linkedMapOf()
+        spareStates = null
+        val incomingCommands = spareCommands ?: ArrayDeque()
+        spareCommands = null
+        states = incomingStates
+        commands = incomingCommands
         val started = nanoTime()
         var operationCount = 0
         try {
@@ -333,18 +448,31 @@ class UiScheduler(
         } finally {
             if (state == SchedulerState.ACTIVE || state == SchedulerState.PAUSED) {
                 val remainingStates = frameStates!!
-                states.forEach { (key, operation) ->
+                incomingStates.forEach { (key, operation) ->
                     if (remainingStates.put(key, operation) != null) {
                         coalesced++
                         released++
                     }
                 }
                 states = remainingStates
-                val remainingGroups = states.keys.mapTo(linkedSetOf(), ::stateGroup)
+                val remainingGroups = if (states.isEmpty()) emptySet() else states.keys.mapTo(linkedSetOf(), ::stateGroup)
                 nextStateGroups = orderedGroups(frameGroups!!, remainingGroups)
                 val remainingCommands = frameCommands!!
-                remainingCommands.addAll(commands)
+                remainingCommands.addAll(incomingCommands)
                 commands = remainingCommands
+            } else {
+                states = frameStates ?: linkedMapOf()
+                commands = frameCommands ?: ArrayDeque()
+            }
+            incomingStates.clear()
+            incomingCommands.clear()
+            spareStates = incomingStates
+            spareCommands = incomingCommands
+            if (index != null) {
+                // Drop object references; only the primitive capacities are retained.
+                index.slots.fill(null)
+                index.groups.clear()
+                spareIndex = index
             }
             frameStates = null
             frameCommands = null
@@ -361,16 +489,19 @@ class UiScheduler(
         val groups = frameGroups!!
         while (groups.isNotEmpty()) {
             val group = groups.removeFirst()
-            val index = frameIndex!!
-            val entry = index.groups.getValue(group)
-            while (entry.head >= 0 && !queue.containsKey(index.slots[entry.head])) entry.head = index.next[entry.head]
-            if (entry.head < 0) continue
-            val slot = index.slots[entry.head]
-            entry.head = index.next[entry.head]
+            val index = frameIndex ?: return
+            val id = index.groups.groupId(group)
+            if (id < 0) continue
+            var head = index.groups.head[id]
+            while (head >= 0 && !queue.containsKey(index.slots[head]!!)) head = index.next[head]
+            if (head < 0) continue
+            val slot = index.slots[head]!!
+            index.groups.head[id] = index.next[head]
             val operation = queue.remove(slot)!!
             if (states.containsKey(slot)) overlappingStates--
-            while (entry.head >= 0 && !queue.containsKey(index.slots[entry.head])) entry.head = index.next[entry.head]
-            if (entry.head >= 0) groups.addLast(group)
+            head = index.groups.head[id]
+            while (head >= 0 && !queue.containsKey(index.slots[head]!!)) head = index.next[head]
+            if (head >= 0) groups.addLast(group)
             apply(operation, 0, 0)
             return
         }
@@ -378,24 +509,73 @@ class UiScheduler(
 
     private fun stateGroup(slot: Any): Any = if (slot is StateSlot) slot.binding else slot
 
+    /** Smallest power-of-two capacity that keeps the table below 75% load for [stateCapacity] groups. */
+    private fun groupTableBound(): Int {
+        val required = (stateCapacity.toLong() + stateCapacity / 3 + 1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        var bound = 16
+        while (bound < required && bound < (1 shl 30)) bound = bound shl 1
+        return bound
+    }
+
     private fun indexStates(queue: Map<Any, ScheduledOperation>): StateIndex {
-        val slots = queue.keys.toTypedArray()
-        val next = IntArray(slots.size) { -1 }
-        val groups = linkedMapOf<Any, StateGroup>()
-        for (index in slots.indices) {
-            val group = stateGroup(slots[index])
-            val entry = groups[group]
-            if (entry == null) groups[group] = StateGroup(index, index)
-            else {
-                next[entry.tail] = index
-                entry.tail = index
+        val index = spareIndex ?: StateIndex(emptyArray(), IntArray(0), GroupTable(16, groupTableBound()))
+        spareIndex = null
+        val count = queue.size
+        if (index.slots.size < count) {
+            index.slots = arrayOfNulls(count)
+            index.next = IntArray(count) { -1 }
+        } else {
+            index.next.fill(-1, 0, count)
+            if (index.slots.size > count) index.slots.fill(null, count, index.slots.size)
+        }
+        index.groups.clear()
+        var slotIndex = 0
+        for (slot in queue.keys) {
+            index.slots[slotIndex] = slot
+            val group = stateGroup(slot)
+            val id = index.groups.groupIdOrInsert(group)
+            if (index.groups.head[id] < 0) index.groups.head[id] = slotIndex
+            else index.next[index.groups.tail[id]] = slotIndex
+            index.groups.tail[id] = slotIndex
+            slotIndex++
+        }
+        return index
+    }
+
+    private fun orderedGroups(previous: ArrayDeque<Any>, index: StateIndex): ArrayDeque<Any> {
+        val groupCount = index.groups.size
+        if (groupCount == 0) {
+            previous.clear()
+            return previous
+        }
+        if (previous.isEmpty()) {
+            for (id in 0 until groupCount) previous.addLast(index.groups.keyAt(id))
+            return previous
+        }
+        val marked = index.groups.mark
+        val ordered = ArrayDeque<Any>(groupCount)
+        for (group in previous) {
+            val id = index.groups.groupId(group)
+            if (id >= 0 && !marked[id]) {
+                marked[id] = true
+                ordered.addLast(group)
             }
         }
-        return StateIndex(slots, next, groups)
+        for (id in 0 until groupCount) {
+            if (marked[id]) marked[id] = false else ordered.addLast(index.groups.keyAt(id))
+        }
+        return ordered
     }
 
     private fun orderedGroups(previous: ArrayDeque<Any>, current: Set<Any>): ArrayDeque<Any> {
-        if (previous.isEmpty()) return ArrayDeque(current)
+        if (current.isEmpty()) {
+            previous.clear()
+            return previous
+        }
+        if (previous.isEmpty()) {
+            previous.addAll(current)
+            return previous
+        }
         val remaining = current.toMutableSet()
         val ordered = ArrayDeque<Any>()
         for (group in previous) if (remaining.remove(group)) ordered.addLast(group)
@@ -469,5 +649,11 @@ class UiScheduler(
         nextStateGroups.clear()
         overlappingStates = 0
         pendingCommands = 0
+        spareStates?.clear()
+        spareStates = null
+        spareCommands?.forEach { it.clear() }
+        spareCommands?.clear()
+        spareCommands = null
+        spareIndex = null
     }
 }

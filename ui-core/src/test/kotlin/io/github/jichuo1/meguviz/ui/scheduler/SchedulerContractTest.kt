@@ -482,4 +482,124 @@ class SchedulerContractTest {
         assertEquals(0, scheduler.pendingStateCount)
         assertEquals(256L, scheduler.counters.appliedOperations)
     }
+
+    @Test fun commandOnlyFrameWithReentrantStateWaitsForNextFrame() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 4)
+        val log = mutableListOf<String>()
+        scheduler.submitCommand {
+            log += "command"
+            scheduler.submitState("reentrant") { log += "state" }
+        }
+        driver.tick()
+        assertEquals(listOf("command"), log)
+        assertEquals(1, scheduler.pendingStateCount)
+        driver.tick()
+        assertEquals(listOf("command", "state"), log)
+        assertEquals(0, scheduler.pendingStateCount)
+    }
+
+    @Test fun faultDuringCommandOnlyFrameClearsSpareQueuesAndRecovers() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 4)
+        val log = mutableListOf<String>()
+        scheduler.submitCommand {
+            log += "first"
+            error("boom")
+        }
+        scheduler.submitCommand { log += "never" }
+        driver.tick()
+        assertEquals(SchedulerState.FAULTED, scheduler.state)
+        assertEquals(0, scheduler.pendingStateCount)
+        assertEquals(0, scheduler.pendingCommandCount)
+        scheduler.recover()
+        scheduler.submitCommand { log += "recovered" }
+        driver.tick()
+        assertEquals(listOf("first", "recovered"), log)
+    }
+
+    @Test fun spareQueuesSurviveMultipleFullDrains() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 2)
+        val log = mutableListOf<Int>()
+        repeat(4) { round ->
+            scheduler.submitState("s") { log += round }
+            scheduler.submitCommand { log += round * 10 }
+            driver.tick()
+        }
+        assertEquals(listOf(0, 0, 1, 10, 2, 20, 3, 30), log)
+        assertEquals(0, scheduler.pendingStateCount)
+        assertEquals(0, scheduler.pendingCommandCount)
+    }
+
+    @Test fun equalButDistinctBindingsShareOneGroup() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 1)
+        val log = mutableListOf<String>()
+        scheduler.submitState(StateSlot(EqualBinding(1), 0)) { log += "a" }
+        scheduler.submitState(StateSlot(EqualBinding(1), 1)) { log += "b" }
+        scheduler.submitState(StateSlot(EqualBinding(2), 0)) { log += "c" }
+        repeat(3) { driver.tick() }
+        assertEquals(listOf("a", "c", "b"), log)
+        assertEquals(0, scheduler.pendingStateCount)
+    }
+
+    @Test fun cachedIndexDropsObjectReferencesAfterFrame() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 4)
+        val binding = Any()
+        scheduler.submitState(StateSlot(binding, 0)) { }
+        driver.tick()
+        val spare = field(scheduler, "spareIndex")
+        assertNotNull("index buffers must be cached for reuse", spare)
+        assertTrue("cached slots must be cleared", (field(spare, "slots") as Array<*>).all { it == null })
+        val groups = field(spare, "groups")
+        assertTrue("cached group keys must be cleared", (field(groups, "keys") as Array<*>).all { it == null })
+        assertTrue("cached group key table must be cleared", (field(groups, "groupKeys") as Array<*>).all { it == null })
+    }
+
+    @Test fun groupTableBoundAllowsThirteenDistinctGroupsAtCapacityThirteen() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, stateCapacity = 13, maxOperations = 13)
+        val log = mutableListOf<Int>()
+        repeat(13) { index ->
+            scheduler.submitState(StateSlot(DistinctBinding(index), 0)) { log += index }
+        }
+        driver.tick()
+        assertEquals((0 until 13).toList(), log)
+        assertEquals(0, scheduler.pendingStateCount)
+    }
+
+    @Test fun groupTableBoundAllowsHashCollidingGroupsAtCapacityThirteen() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, stateCapacity = 13, maxOperations = 13)
+        val log = mutableListOf<Int>()
+        repeat(13) { index ->
+            scheduler.submitState(StateSlot(CollidingBinding(index), 0)) { log += index }
+        }
+        driver.tick()
+        assertEquals((0 until 13).toList(), log)
+        assertEquals(0, scheduler.pendingStateCount)
+    }
+
+    private class DistinctBinding(val id: Int) {
+        override fun hashCode() = id
+        override fun equals(other: Any?): Boolean = other is DistinctBinding && id == other.id
+    }
+
+    private class CollidingBinding(val id: Int) {
+        override fun hashCode() = 1
+        override fun equals(other: Any?): Boolean = other is CollidingBinding && id == other.id
+    }
+
+    private fun field(target: Any?, name: String): Any? {
+        val found = target!!.javaClass.getDeclaredField(name)
+        found.isAccessible = true
+        return found.get(target)
+    }
+
+    private class EqualBinding(val id: Int) {
+        override fun hashCode() = id
+        override fun equals(other: Any?): Boolean = other is EqualBinding && id == other.id
+    }
 }
