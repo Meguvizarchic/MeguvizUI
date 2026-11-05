@@ -82,6 +82,8 @@ class PropertyBinding<V : View, T> internal constructor(
         val equals = if (spec.comparisonAllowed(view)) spec.equivalent else null
         if (closed) return
         // Only ownership modes that keep a cache can compare; a read is only worth its cost then.
+        // Keep the `when` form: the compiler emits PropertyBinding$WhenMappings for it, which is
+        // part of the published API baseline.
         val previous: Applied<T>? = when (spec.ownership) {
             PropertyOwnership.EXCLUSIVE -> applied
             PropertyOwnership.SHARED_READ -> if (equals != null) Applied(spec.read!!.invoke(view)) else null

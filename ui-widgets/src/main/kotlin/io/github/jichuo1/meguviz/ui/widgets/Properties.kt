@@ -35,9 +35,9 @@ object Properties {
         equivalent = { a, b -> a == b }, read = { it.visibility }, write = { view, value -> view.visibility = value },
     )
 
-    /** Commands preserve repeated attempts. Readback observes listener rejection/rollback. */
+    /** Commands preserve repeated attempts; the control/framework owns the final value. */
     fun checked() = PropertySpec<CompoundButton, Boolean>(
         id = "checked", effect = EffectMask.PAINT or EffectMask.SEMANTICS,
-        ownership = PropertyOwnership.ALWAYS_WRITE, read = { it.isChecked }, write = { view, checked -> view.isChecked = checked },
+        ownership = PropertyOwnership.ALWAYS_WRITE, write = { view, checked -> view.isChecked = checked },
     )
 }

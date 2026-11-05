@@ -95,6 +95,8 @@ class UiScheduler(
         fun clear() {
             keys.fill(null)
             groupKeys.fill(null, 0, size)
+            // Defensive: orderedGroups resets the marks it sets, but a future early return must
+            // not leave stale marks behind.
             mark.fill(false, 0, size)
             size = 0
         }

@@ -100,6 +100,13 @@ class AndroidFrameDriver(
     }
 }
 
+/**
+ * Copies the upstream tick into a [FrameBudget].
+ *
+ * The derived work budget subtracts [FrameBudget.deadlineNanos] from the scheduler's
+ * `System.nanoTime()`, so the upstream `FrameTick.deadlineNanos()` must share that time base.
+ * Drivers that cannot guarantee it must leave the deadline null (`estimated = true`).
+ */
 internal fun FrameTick.toUiBudget(owner: String): FrameBudget {
     // The platform only knows the deadline when the upstream driver supplied one; otherwise the
     // budget stays advisory (estimated) and the scheduler keeps its fixed work budget.
