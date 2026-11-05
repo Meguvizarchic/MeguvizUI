@@ -302,8 +302,8 @@ class UiScheduler(
         assertOwner()
         if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
         state = SchedulerState.PAUSED
-        cancelFrame()
-        if (clearPending) clearQueues()
+        // A driver cancel that raises an Error must not skip the queue cleanup.
+        try { cancelFrame() } finally { if (clearPending) clearQueues() }
     }
 
     fun resume() {
@@ -677,8 +677,7 @@ class UiScheduler(
     private fun fault(label: String, index: Int, appliedInBatch: Int, phase: String, error: Throwable) {
         failure = SchedulerFailure(label, index, appliedInBatch, phase, error.javaClass.name, error.message)
         if (state != SchedulerState.CLOSED) state = SchedulerState.FAULTED
-        cancelFrame()
-        clearQueues()
+        try { cancelFrame() } finally { clearQueues() }
     }
 
     private fun cancelFrame() {

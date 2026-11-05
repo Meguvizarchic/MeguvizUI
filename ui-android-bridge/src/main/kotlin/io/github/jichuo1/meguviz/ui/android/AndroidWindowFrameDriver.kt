@@ -11,7 +11,9 @@ import io.github.jichuo1.meguviz.ui.scheduler.UiFrameDriver
 internal class AndroidWindowFrameDriver(window: WindowSession, identity: Any, initiallyAttached: Boolean) : UiFrameDriver, AutoCloseable {
     override val owner = "meguviz-android.window"
     private val dispatcher = window.dispatcher()
-    private class Request(var callback: ((FrameBudget) -> Unit)?)
+    private class Request(var callback: ((FrameBudget) -> Unit)?, var generation: Long = 0)
+    private val request = Request(null)
+    private var requestGeneration = 0L
     private var pending: Request? = null
     private var channel: WindowSession.WindowFrameChannel? = null
     private var registration: Registration? = null
@@ -41,13 +43,19 @@ internal class AndroidWindowFrameDriver(window: WindowSession, identity: Any, in
         if (closed || attached == value) return
         attached = value
         if (!value) channel?.cancelPending()
+        // close() sets closed before clearing channel, and setAttached returns early once closed,
+        // so a non-null pending implies a live channel; fail fast if that invariant is ever broken.
         else if (pending != null) checkNotNull(channel).requestFrame()
     }
 
     override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
         dispatcher.checkOwner()
         check(!closed && pending == null) { "Window driver closed or frame already pending" }
-        val request = Request(callback)
+        // One reusable request slot: a session never has two pending requests, and the
+        // generation keeps a stale ticket from clearing its replacement.
+        val generation = ++requestGeneration
+        request.callback = callback
+        request.generation = generation
         pending = request
         try { if (attached) checkNotNull(channel).requestFrame() }
         catch (failure: Throwable) {
@@ -57,8 +65,11 @@ internal class AndroidWindowFrameDriver(window: WindowSession, identity: Any, in
         }
         return FrameTicket {
             dispatcher.checkOwner()
-            request.callback = null
-            if (pending === request) { pending = null; channel?.cancelPending() }
+            if (request.generation == generation && pending === request) {
+                request.callback = null
+                pending = null
+                channel?.cancelPending()
+            }
         }
     }
 

@@ -24,14 +24,18 @@ class AndroidUiBinding private constructor(
     private var closed = false
     private val attachment = object : View.OnAttachStateChangeListener {
         override fun onViewDetachedFromWindow(view: View) {
-            if (!closed) {
-                this@AndroidUiBinding.driver?.setAttached(false)
-                if (ui.state == SessionState.ACTIVE) ui.detach()
-            }
+            if (closed) return
+            // Cancel the upstream request before the session stops consuming frames.
+            this@AndroidUiBinding.driver?.setAttached(false)
+            if (ui.state == SessionState.ACTIVE) ui.detach()
         }
         override fun onViewAttachedToWindow(view: View) {
-            if (!closed && ui.state == SessionState.DETACHED && ui.scheduler.state == SchedulerState.PAUSED) ui.reattach()
-            if (!closed) this@AndroidUiBinding.driver?.setAttached(true)
+            if (closed) return
+            // Attach first so reattach's scheduler.resume() issues the frame request directly
+            // instead of relying on setAttached to replay it.
+            this@AndroidUiBinding.driver?.setAttached(true)
+            // scheduler.resume() requires PAUSED; a FAULTED scheduler must be recovered explicitly.
+            if (ui.state == SessionState.DETACHED && ui.scheduler.state == SchedulerState.PAUSED) ui.reattach()
         }
     }
 

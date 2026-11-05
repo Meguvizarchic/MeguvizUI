@@ -14,7 +14,9 @@ class AndroidFrameDriver(
     identity: Any,
 ) : UiFrameDriver, AutoCloseable {
     override val owner: String = "meguviz-android.runtime"
-    private class Request(var callback: ((FrameBudget) -> Unit)?)
+    private class Request(var callback: ((FrameBudget) -> Unit)?, var generation: Long = 0)
+    private val request = Request(null)
+    private var requestGeneration = 0L
     private var pending: Request? = null
     private var channel: FrameScheduler.FrameChannel? = null
     private var closeAction: (() -> Unit)? = null
@@ -41,7 +43,11 @@ class AndroidFrameDriver(
         dispatcher.checkOwner()
         check(!isClosed) { "Android frame channel closed" }
         check(pending == null) { "A UI session may have only one pending frame request" }
-        val request = Request(callback)
+        // One reusable request slot: a session never has two pending requests, and the
+        // generation keeps a stale ticket from clearing its replacement.
+        val generation = ++requestGeneration
+        request.callback = callback
+        request.generation = generation
         pending = request
         try { checkNotNull(channel).requestFrame() }
         catch (failure: Throwable) {
@@ -51,8 +57,8 @@ class AndroidFrameDriver(
         }
         return FrameTicket {
             dispatcher.checkOwner()
-            request.callback = null
-            if (pending === request) {
+            if (request.generation == generation && pending === request) {
+                request.callback = null
                 pending = null
                 channel?.cancelPending()
             }
@@ -94,9 +100,14 @@ class AndroidFrameDriver(
     }
 }
 
-internal fun FrameTick.toUiBudget(owner: String): FrameBudget = FrameBudget(
-    frameTimeNanos = frameTimeNanos(),
-    deadlineNanos = deadlineNanos(),
-    estimated = true,
-    source = "$owner:${budgetSource()}",
-)
+internal fun FrameTick.toUiBudget(owner: String): FrameBudget {
+    // The platform only knows the deadline when the upstream driver supplied one; otherwise the
+    // budget stays advisory (estimated) and the scheduler keeps its fixed work budget.
+    val deadline = deadlineNanos()
+    return FrameBudget(
+        frameTimeNanos = frameTimeNanos(),
+        deadlineNanos = deadline,
+        estimated = deadline == null,
+        source = "$owner:${budgetSource()}",
+    )
+}

@@ -88,6 +88,25 @@ class AndroidBridgeContractTest {
         driver.close(); upstream.close()
     }
 
+    @Test fun deliveredTicketCannotCancelTheNextRequest() {
+        val clock = PlatformClock()
+        val upstream = clock.scheduler()
+        val driver = AndroidFrameDriver(clock, upstream, Any())
+        val first = mutableListOf<Int>()
+        val second = mutableListOf<Int>()
+        val stale = driver.requestFrame { first += 1 }
+        clock.tick()
+        assertEquals(listOf(1), first)
+        // The request slot is reused; the generation must keep the stale ticket inert.
+        driver.requestFrame { second += 1 }
+        stale.cancel()
+        assertEquals(0, clock.removals)
+        assertEquals(2, clock.requests)
+        clock.tick()
+        assertEquals(listOf(1), second)
+        driver.close(); upstream.close()
+    }
+
     @Test fun mvxF03ReentrantUiSubmissionUsesExactlyTheNextUpstreamFrame() {
         val clock = PlatformClock()
         val upstream = clock.scheduler()

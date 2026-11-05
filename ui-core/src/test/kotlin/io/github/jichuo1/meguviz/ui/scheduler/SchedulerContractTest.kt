@@ -177,6 +177,36 @@ class SchedulerContractTest {
         }
     }
 
+    @Test fun driverCancelErrorStillClearsQueues() {
+        run {
+            val driver = object : UiFrameDriver {
+                override val owner = "test.cancel-error-pause"
+                override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket =
+                    FrameTicket { throw AssertionError("cancel boom") }
+            }
+            val scheduler = UiScheduler(driver, {}, nanoTime = { 0 })
+            scheduler.submitCommand { fail("must not run") }
+            val failure = runCatching { scheduler.pause() }.exceptionOrNull()
+            assertTrue("pause propagates the driver Error", failure is Error)
+            assertEquals(0, scheduler.pendingCommandCount)
+            assertEquals(0, scheduler.pendingStateCount)
+        }
+        run {
+            // A frame ticket is pending here, so fault()'s cancelFrame reaches the failing ticket.
+            val driver = object : UiFrameDriver {
+                override val owner = "test.cancel-error-fault"
+                override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket =
+                    FrameTicket { throw AssertionError("cancel boom") }
+            }
+            val scheduler = UiScheduler(driver, {}, nanoTime = { 0 })
+            scheduler.submitCommand(isValid = { throw IllegalStateException("validator boom") }, action = { })
+            val failure = runCatching { scheduler.discardInvalid() }.exceptionOrNull()
+            assertTrue("fault propagates the driver Error but was: $failure", failure is Error)
+            assertEquals(SchedulerState.FAULTED, scheduler.state)
+            assertEquals(0, scheduler.pendingCommandCount)
+        }
+    }
+
     @Test fun cancelInvalidatesBeforeRemovalAndReentryWaitsForAnotherTick() {
         run {
             var delivered: ((FrameBudget) -> Unit)? = null
