@@ -81,9 +81,10 @@ class PropertyBinding<V : View, T> internal constructor(
         val view = ref.get()
         val equals = if (spec.comparisonAllowed(view)) spec.equivalent else null
         if (closed) return
-        val previous = when (spec.ownership) {
+        // Only ownership modes that keep a cache can compare; a read is only worth its cost then.
+        val previous: Applied<T>? = when (spec.ownership) {
             PropertyOwnership.EXCLUSIVE -> applied
-            PropertyOwnership.SHARED_READ -> Applied(spec.read!!.invoke(view))
+            PropertyOwnership.SHARED_READ -> if (equals != null) Applied(spec.read!!.invoke(view)) else null
             PropertyOwnership.ALWAYS_WRITE -> null
         }
         if (closed) return
@@ -92,9 +93,12 @@ class PropertyBinding<V : View, T> internal constructor(
         spec.write(view, value)
         writes++
         if (closed) return
-        // A rejecting/rolling-back listener owns the final value when a getter is supplied.
-        val confirmed = spec.snapshot(spec.read?.invoke(view) ?: value)
-        if (!closed) applied = Applied(confirmed)
+        // Only EXCLUSIVE keeps a cache for the next comparison; a read-back for the other modes
+        // would be dead work (the value is never read).
+        if (spec.ownership == PropertyOwnership.EXCLUSIVE) {
+            val confirmed = spec.snapshot(spec.read?.invoke(view) ?: value)
+            if (!closed) applied = Applied(confirmed)
+        }
     }
 
     override fun close() {

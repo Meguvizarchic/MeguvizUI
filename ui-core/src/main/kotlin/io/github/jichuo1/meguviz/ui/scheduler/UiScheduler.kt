@@ -95,6 +95,7 @@ class UiScheduler(
         fun clear() {
             keys.fill(null)
             groupKeys.fill(null, 0, size)
+            mark.fill(false, 0, size)
             size = 0
         }
 
@@ -454,11 +455,17 @@ class UiScheduler(
         states = incomingStates
         commands = incomingCommands
         val started = nanoTime()
+        // A real platform deadline caps the work budget by the time left before it, minus a tail
+        // reserved for traversal/draw. An estimated or unknown deadline keeps the fixed budget.
+        val reservedTailNanos = 1_000_000L // traversal/draw tail; see docs/scheduling.md
+        val deadline = if (budget.estimated) null else budget.deadlineNanos
+        val workBudgetNanos = if (deadline == null) maxFrameWorkNanos
+        else (deadline - started - reservedTailNanos).coerceIn(0L, maxFrameWorkNanos)
         var operationCount = 0
         try {
             while (state == SchedulerState.ACTIVE && operationCount < maxOperationsPerFrame) {
                 val now = nanoTime()
-                if (now - started >= maxFrameWorkNanos || budget.deadlineNanos?.let { now >= it } == true) break
+                if (now - started >= workBudgetNanos) break
                 val stateWork = frameStates!!.isNotEmpty()
                 val commandWork = frameCommands!!.isNotEmpty()
                 if (!stateWork && !commandWork) break

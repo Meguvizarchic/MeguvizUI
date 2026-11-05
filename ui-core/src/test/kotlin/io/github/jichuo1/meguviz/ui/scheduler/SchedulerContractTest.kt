@@ -207,6 +207,42 @@ class SchedulerContractTest {
         }
     }
 
+    @Test fun estimatedDeadlineIsIgnored() {
+        val driver = VirtualFrameDriver()
+        var now = 0L
+        val scheduler = scheduler(driver, clock = { now })
+        val log = mutableListOf<Int>()
+        repeat(4) { index -> scheduler.submitCommand { log += index; now += 1_000_000L } }
+        // estimated=true: the deadline must be ignored, so the fixed 2ms budget applies (2 operations).
+        driver.tick(FrameBudget(0, deadlineNanos = 2_000_000L, estimated = true))
+        assertEquals(listOf(0, 1), log)
+        assertEquals(2, scheduler.pendingCommandCount)
+    }
+
+    @Test fun derivedBudgetStopsAtSoftDeadline() {
+        val driver = VirtualFrameDriver()
+        var now = 0L
+        val scheduler = scheduler(driver, clock = { now })
+        val log = mutableListOf<Int>()
+        repeat(4) { index -> scheduler.submitCommand { log += index; now += 1_000_000L } }
+        // deadline=4ms, tail=1ms -> soft deadline 3ms -> min(2ms, 3ms) = 2ms -> 2 operations.
+        driver.tick(FrameBudget(0, deadlineNanos = 4_000_000L, estimated = false))
+        assertEquals(listOf(0, 1), log)
+        assertEquals(2, scheduler.pendingCommandCount)
+    }
+
+    @Test fun derivedBudgetShrinksForLateFrames() {
+        val driver = VirtualFrameDriver()
+        var now = 0L
+        val scheduler = scheduler(driver, clock = { now })
+        val log = mutableListOf<Int>()
+        repeat(4) { index -> scheduler.submitCommand { log += index; now += 1_000_000L } }
+        // deadline=2ms, tail=1ms -> soft deadline 1ms -> min(2ms, 1ms) = 1ms -> 1 operation.
+        driver.tick(FrameBudget(0, deadlineNanos = 2_000_000L, estimated = false))
+        assertEquals(listOf(0), log)
+        assertEquals(3, scheduler.pendingCommandCount)
+    }
+
     @Test fun cancelInvalidatesBeforeRemovalAndReentryWaitsForAnotherTick() {
         run {
             var delivered: ((FrameBudget) -> Unit)? = null
