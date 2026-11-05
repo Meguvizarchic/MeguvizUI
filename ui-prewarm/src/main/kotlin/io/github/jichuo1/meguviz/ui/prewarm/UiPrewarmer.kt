@@ -43,6 +43,8 @@ class UiPrewarmer(
     private var discarding = false
     private var running: Entry? = null
     private var deferredStop: PrewarmStop? = null
+    private val scheduleValidity: () -> Boolean = { scheduled && !closed && queue.isNotEmpty() }
+    private val scheduleAction: () -> Unit = { scheduled = false; runUnit() }
     val pendingCount: Int get() { assertOwner(); return queue.size }
 
     init {
@@ -99,10 +101,7 @@ class UiPrewarmer(
     private fun schedule(): Boolean {
         if (queue.isEmpty() || closed || scheduled) return true
         scheduled = true
-        val submission = scheduler.submitCommand(isValid = { scheduled && !closed && queue.isNotEmpty() }) {
-            scheduled = false
-            runUnit()
-        }
+        val submission = scheduler.submitCommand(isValid = scheduleValidity, action = scheduleAction)
         if (submission is SubmitResult.Rejected || scheduler.state != SchedulerState.ACTIVE) {
             scheduled = false
             return false

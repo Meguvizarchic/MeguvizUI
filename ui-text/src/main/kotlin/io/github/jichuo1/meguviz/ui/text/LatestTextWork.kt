@@ -10,25 +10,43 @@ internal class LatestTextWork<I, O>(
     private val calculate: (I) -> O,
     private val onComplete: (I, Result<O>) -> Unit,
 ) : AutoCloseable {
-    private class Work<I>(val value: I)
+    private class Work<I>(var value: I)
     private val ownerThread = Thread.currentThread()
     private var running: Work<I>? = null
     private var pending: Work<I>? = null
+    private var reusable: Work<I>? = null
     private var closed = false
     private var dispatchFailure: Throwable? = null
 
     fun submit(value: I) {
         check(Thread.currentThread() === ownerThread) { "Owner thread required" }
-        val work = Work(value)
         val start = synchronized(this) {
             dispatchFailure?.let { throw IllegalStateException("Owner dispatcher failed; controller is closed", it) }
             check(!closed) { "Text controller closed" }
-            if (running != null) { pending = work; false } else { running = work; true }
+            if (running != null) {
+                // Keep the pending slot (or the one invalidate just dropped) and only replace
+                // its value: a superseded submission never runs, so its Work need not be reallocated.
+                // Clear reusable on promotion: leaving it aliased would let the owner thread
+                // rewrite Work.value while the background thread reads the running instance.
+                val slot = pending ?: reusable?.also { pending = it; reusable = null }
+                if (slot != null) slot.value = value else pending = Work(value)
+                null
+            } else {
+                val work = reusable ?: Work(value)
+                reusable = null
+                work.value = value
+                running = work
+                work
+            }
         }
-        if (start) launch(work)
+        if (start != null) launch(start)
     }
 
-    @Synchronized fun invalidate() { pending = null }
+    @Synchronized fun invalidate() {
+        val dropped = pending
+        pending = null
+        if (dropped != null) reusable = dropped
+    }
 
     private fun launch(work: Work<I>) {
         val submitting = AtomicBoolean(true)
@@ -86,11 +104,13 @@ internal class LatestTextWork<I, O>(
         closed = true
         running = null
         pending = null
+        reusable = null
     }
 
     @Synchronized override fun close() {
         closed = true
         running = null
         pending = null
+        reusable = null
     }
 }

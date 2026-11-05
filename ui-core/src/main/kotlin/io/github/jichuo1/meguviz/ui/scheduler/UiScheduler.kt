@@ -177,19 +177,24 @@ class UiScheduler(
 
     private var states = linkedMapOf<Any, ScheduledOperation>()
     private var driver: UiFrameDriver? = driver
-    private var commands = ArrayDeque<Batch>()
+    // Command queue entries are either a single ScheduledOperation (submitCommand fast path,
+    // no Batch/array allocation) or a Batch (submitBatch).
+    private var commands = ArrayDeque<Any>()
     private var frameStates: LinkedHashMap<Any, ScheduledOperation>? = null
-    private var frameCommands: ArrayDeque<Batch>? = null
+    private var frameCommands: ArrayDeque<Any>? = null
     private var frameGroups: ArrayDeque<Any>? = null
     private var frameIndex: StateIndex? = null
     private var spareIndex: StateIndex? = null
     private var spareStates: LinkedHashMap<Any, ScheduledOperation>? = null
-    private var spareCommands: ArrayDeque<Batch>? = null
-    private var nextStateGroups = ArrayDeque<Any>()
+    private var spareCommands: ArrayDeque<Any>? = null
+    private var spareGroupSet: MutableSet<Any>? = null
+    private var spareGroupList: MutableList<Any>? = null
+    private var nextStateGroups = ArrayDeque<Any>(stateCapacity)
     private var overlappingStates = 0
     private var pendingCommands = 0
     private var pendingTicket: FrameTicket? = null
-    private var frameIdentity: Any? = null
+    private var frameIdentity = 0L
+    private var frameSequence = 0L
     private var requestingFrame = false
     private var draining = false
     private var preferState = true
@@ -238,12 +243,16 @@ class UiScheduler(
     fun submitState(slot: Any, isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
         assertOwner()
         rejectionForState()?.let { return reject(it) }
-        val replacing = states.containsKey(slot)
-        if (!replacing && frameStates?.containsKey(slot) != true && pendingStateCount >= stateCapacity) {
+        // Fast path (room available) does a single put() lookup. Only at capacity do we resolve
+        // whether this slot is a replacement, so the rejection path allocates nothing.
+        if (pendingStateCount >= stateCapacity && frameStates?.containsKey(slot) != true &&
+            !states.containsKey(slot)
+        ) {
             return reject(RejectionReason.STATE_CAPACITY)
         }
         val previous = states.put(slot, ScheduledOperation("state", isValid, action))
-        if (previous == null && frameStates?.containsKey(slot) == true) overlappingStates++
+        val replacing = previous != null
+        if (!replacing && frameStates?.containsKey(slot) == true) overlappingStates++
         accepted++
         if (previous != null) {
             coalesced++
@@ -257,7 +266,7 @@ class UiScheduler(
         assertOwner()
         rejectionForState()?.let { return reject(it) }
         if (pendingCommands >= commandCapacity) return reject(RejectionReason.COMMAND_CAPACITY)
-        return enqueue(Batch(arrayOf(ScheduledOperation("command", isValid, action))))
+        return enqueue(ScheduledOperation("command", isValid, action))
     }
 
     /** Entire batch admission is atomic; applying the admitted batch is deliberately not a transaction. */
@@ -280,9 +289,9 @@ class UiScheduler(
         return enqueue(Batch(snapshot))
     }
 
-    private fun enqueue(batch: Batch): SubmitResult {
-        commands.addLast(batch)
-        pendingCommands += batch.remaining
+    private fun enqueue(entry: Any): SubmitResult {
+        commands.addLast(entry)
+        pendingCommands += if (entry is Batch) entry.remaining else 1
         accepted++
         requestIfNeeded()
         return SubmitResult.Accepted
@@ -331,19 +340,32 @@ class UiScheduler(
             }
         }
         for (queue in listOfNotNull(commands, frameCommands)) {
-            for (batch in queue.toList()) {
-                for (index in batch.cursor until batch.operations.size) {
+            for (entry in queue.toList()) {
+                if (entry is Batch) {
+                    for (index in entry.cursor until entry.operations.size) {
+                        if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
+                        val operation = entry.operations[index] ?: continue
+                        val valid = checkPending(operation, index, entry.applied) ?: return
+                        if (!valid && queue.contains(entry) && entry.operations[index] === operation) {
+                            entry.remove(index)
+                            pendingCommands--
+                            stale++
+                            released++
+                        }
+                    }
+                    if (entry.remaining == 0) queue.remove(entry)
+                } else {
                     if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
-                    val operation = batch.operations[index] ?: continue
-                    val valid = checkPending(operation, index, batch.applied) ?: return
-                    if (!valid && queue.contains(batch) && batch.operations[index] === operation) {
-                        batch.remove(index)
+                    val operation = entry as? ScheduledOperation
+                        ?: error("unexpected command entry: ${entry::class.java.name}")
+                    val valid = checkPending(operation, 0, 0) ?: return
+                    if (!valid && queue.contains(entry)) {
+                        queue.remove(entry)
                         pendingCommands--
                         stale++
                         released++
                     }
                 }
-                if (batch.remaining == 0) queue.remove(batch)
             }
         }
         val groups = (states.keys + (frameStates?.keys ?: emptySet())).map(::stateGroup).toSet()
@@ -383,9 +405,10 @@ class UiScheduler(
     }
 
     private fun requestIfNeeded() {
-        if (state != SchedulerState.ACTIVE || draining || frameIdentity != null ||
+        if (state != SchedulerState.ACTIVE || draining || frameIdentity != 0L ||
             (states.isEmpty() && commands.isEmpty())) return
-        val identity = Any()
+        // A monotonically increasing serial avoids allocating an identity object per frame.
+        val identity = ++frameSequence
         frameIdentity = identity
         requestingFrame = true
         requested++
@@ -393,12 +416,12 @@ class UiScheduler(
             val ticket = checkNotNull(driver).requestFrame { budget ->
                 assertOwner()
                 check(!requestingFrame) { "UiFrameDriver must not invoke a requested callback synchronously" }
-                if (frameIdentity !== identity || state != SchedulerState.ACTIVE) return@requestFrame
-                frameIdentity = null
+                if (frameIdentity != identity || state != SchedulerState.ACTIVE) return@requestFrame
+                frameIdentity = 0L
                 pendingTicket = null
                 drain(budget)
             }
-            if (frameIdentity === identity) pendingTicket = ticket else ticket.cancel()
+            if (frameIdentity == identity) pendingTicket = ticket else ticket.cancel()
         } catch (error: Throwable) {
             fault("frame-request", -1, 0, "driver", error)
             if (error is Error) throw error
@@ -424,7 +447,6 @@ class UiScheduler(
             orderedGroups(previousGroups, index)
         }
         frameGroups = ordered
-        if (ordered !== previousGroups) previousGroups.clear()
         val incomingStates = spareStates ?: linkedMapOf()
         spareStates = null
         val incomingCommands = spareCommands ?: ArrayDeque()
@@ -455,8 +477,15 @@ class UiScheduler(
                     }
                 }
                 states = remainingStates
-                val remainingGroups = if (states.isEmpty()) emptySet() else states.keys.mapTo(linkedSetOf(), ::stateGroup)
+                // Reuse one scratch set across frames; orderedGroups consumes it, so it is
+                // cleared on the next frame before being filled again.
+                val remainingGroups = spareGroupSet ?: linkedSetOf()
+                spareGroupSet = null
+                remainingGroups.clear()
+                // Guard the iteration: keySet().iterator() allocates even when the map is empty.
+                if (states.isNotEmpty()) states.keys.mapTo(remainingGroups, ::stateGroup)
                 nextStateGroups = orderedGroups(frameGroups!!, remainingGroups)
+                spareGroupSet = remainingGroups
                 val remainingCommands = frameCommands!!
                 remainingCommands.addAll(incomingCommands)
                 commands = remainingCommands
@@ -552,22 +581,34 @@ class UiScheduler(
             for (id in 0 until groupCount) previous.addLast(index.groups.keyAt(id))
             return previous
         }
+        // Rebuild in place: keep the surviving groups in order, then append new groups. A
+        // reusable list avoids O(k*n) ArrayDeque.delete shifts when many groups drop at once.
         val marked = index.groups.mark
-        val ordered = ArrayDeque<Any>(groupCount)
+        val surviving = spareGroupList ?: arrayListOf()
+        spareGroupList = null
+        surviving.clear()
         for (group in previous) {
             val id = index.groups.groupId(group)
             if (id >= 0 && !marked[id]) {
                 marked[id] = true
-                ordered.addLast(group)
+                surviving.add(group)
             }
         }
+        previous.clear()
+        previous.addAll(surviving)
+        spareGroupList = surviving
         for (id in 0 until groupCount) {
-            if (marked[id]) marked[id] = false else ordered.addLast(index.groups.keyAt(id))
+            if (marked[id]) marked[id] = false else previous.addLast(index.groups.keyAt(id))
         }
-        return ordered
+        return previous
     }
 
-    private fun orderedGroups(previous: ArrayDeque<Any>, current: Set<Any>): ArrayDeque<Any> {
+    /**
+     * Rebuilds [previous] in place and returns it. When [previous] is non-empty, [current] is
+     * consumed as scratch and left holding only the groups absent from [previous]; the
+     * [previous].isEmpty() early return does not consume it.
+     */
+    private fun orderedGroups(previous: ArrayDeque<Any>, current: MutableSet<Any>): ArrayDeque<Any> {
         if (current.isEmpty()) {
             previous.clear()
             return previous
@@ -576,23 +617,38 @@ class UiScheduler(
             previous.addAll(current)
             return previous
         }
-        val remaining = current.toMutableSet()
-        val ordered = ArrayDeque<Any>()
-        for (group in previous) if (remaining.remove(group)) ordered.addLast(group)
-        ordered.addAll(remaining)
-        return ordered
+        // Rebuild in place: keep the previous order for surviving groups, then append new ones.
+        val surviving = spareGroupList ?: arrayListOf()
+        spareGroupList = null
+        surviving.clear()
+        for (group in previous) {
+            if (current.remove(group)) surviving.add(group)
+        }
+        previous.clear()
+        previous.addAll(surviving)
+        previous.addAll(current)
+        spareGroupList = surviving
+        return previous
     }
 
     private fun applyCommand() {
         val queue = frameCommands!!
-        val batch = queue.first
-        while (batch.operations[batch.cursor] == null) batch.cursor++
-        val index = batch.cursor++
-        val operation = batch.operations[index]!!
-        batch.remove(index)
-        pendingCommands--
-        if (batch.remaining == 0) queue.removeFirst()
-        if (apply(operation, index, batch.applied)) batch.applied++
+        val entry = queue.first
+        if (entry is Batch) {
+            while (entry.operations[entry.cursor] == null) entry.cursor++
+            val index = entry.cursor++
+            val operation = entry.operations[index]!!
+            entry.remove(index)
+            pendingCommands--
+            if (entry.remaining == 0) queue.removeFirst()
+            if (apply(operation, index, entry.applied)) entry.applied++
+        } else {
+            val operation = entry as? ScheduledOperation
+                ?: error("unexpected command entry: ${entry::class.java.name}")
+            queue.removeFirst()
+            pendingCommands--
+            apply(operation, 0, 0)
+        }
     }
 
     private fun apply(operation: ScheduledOperation, index: Int, appliedInBatch: Int): Boolean {
@@ -626,7 +682,7 @@ class UiScheduler(
     }
 
     private fun cancelFrame() {
-        frameIdentity = null
+        frameIdentity = 0L
         val ticket = pendingTicket
         pendingTicket = null
         try {
@@ -639,10 +695,10 @@ class UiScheduler(
     private fun clearQueues() {
         released += states.size + (frameStates?.size ?: 0) + pendingCommands
         states.clear()
-        commands.forEach { it.clear() }
+        commands.forEach { if (it is Batch) it.clear() }
         commands.clear()
         frameStates?.clear()
-        frameCommands?.forEach { it.clear() }
+        frameCommands?.forEach { if (it is Batch) it.clear() }
         frameCommands?.clear()
         frameGroups?.clear()
         frameIndex = null
@@ -651,9 +707,13 @@ class UiScheduler(
         pendingCommands = 0
         spareStates?.clear()
         spareStates = null
-        spareCommands?.forEach { it.clear() }
+        spareCommands?.forEach { if (it is Batch) it.clear() }
         spareCommands?.clear()
         spareCommands = null
         spareIndex = null
+        spareGroupSet?.clear()
+        spareGroupSet = null
+        spareGroupList?.clear()
+        spareGroupList = null
     }
 }

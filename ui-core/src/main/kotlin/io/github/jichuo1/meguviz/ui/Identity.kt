@@ -8,13 +8,33 @@ import android.view.ViewGroup
 @Target(AnnotationTarget.CLASS, AnnotationTarget.TYPE)
 annotation class UiDsl
 
-/** Process-local identity. Overflow replaces the domain instead of reviving old tokens. */
+/**
+ * Process-local identity. Overflow replaces the domain instead of reviving old tokens.
+ * Owner-thread only: the cached token is safe because every caller is guarded by the session's
+ * owner check, and the cache self-heals if the fields are ever changed behind [advance].
+ */
 class EpochDomain {
     private var identity = Any()
     private var epoch = 0L
-    fun token(): EpochToken = EpochToken(identity, epoch)
+    private var cachedIdentity: Any = identity
+    private var cachedEpoch = epoch
+    private var cachedToken = EpochToken(identity, epoch)
+
+    /** EpochToken is immutable and compared by identity+epoch, so the current token can be cached. */
+    fun token(): EpochToken {
+        if (cachedIdentity !== identity || cachedEpoch != epoch) {
+            cachedIdentity = identity
+            cachedEpoch = epoch
+            cachedToken = EpochToken(identity, epoch)
+        }
+        return cachedToken
+    }
+
     fun advance() {
         if (epoch == Long.MAX_VALUE) { identity = Any(); epoch = 0 } else epoch++
+        cachedIdentity = identity
+        cachedEpoch = epoch
+        cachedToken = EpochToken(identity, epoch)
     }
 }
 

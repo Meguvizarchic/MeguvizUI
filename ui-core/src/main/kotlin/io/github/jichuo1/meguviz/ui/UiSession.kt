@@ -36,6 +36,9 @@ class UiSession(
     private val nodes = linkedMapOf<Long, Node>()
     private val parentKeys = IdentityHashMap<ViewGroup, MutableSet<ViewKey>>()
     private val views = IdentityHashMap<View, Long>()
+    // Keyed by the parent View (not its identity) so children attached to a parent that is
+    // borrowed/transferred into the session later are still found when that parent is released.
+    private val children = IdentityHashMap<View, MutableSet<Long>>()
     private val sessionCleanup = mutableListOf<() -> Unit>()
     private class Node(
         val view: View,
@@ -142,6 +145,7 @@ class UiSession(
         val identity = nextIdentity++
         nodes[identity] = Node(view, key, component, parent, ownership)
         views[view] = identity
+        parent?.let { p -> children.getOrPut(p) { mutableSetOf() }.add(identity) }
         return ViewRef(this, identity, key, component)
     }
     internal fun <V : View> resolve(ref: ViewRef<V>): V {
@@ -223,9 +227,9 @@ class UiSession(
     fun release(ref: ViewRef<*>) {
         assertOwner(); check(ref.session === this)
         val node = nodes[ref.identity] ?: return
-        val children = nodes.filterValues { child -> child.parent === node.view }.keys.toList()
+        val childIds = children.remove(node.view) ?: emptySet()
         val failures = mutableListOf<Throwable>()
-        children.forEach { id -> nodes[id]?.let { child -> try { release(ViewRef(this, id, child.key, child.component)) } catch (t: Throwable) { failures += t } } }
+        childIds.forEach { id -> nodes[id]?.let { child -> try { release(ViewRef(this, id, child.key, child.component)) } catch (t: Throwable) { failures += t } } }
         nodes.remove(ref.identity)
         node.binding.advance()
         scheduler.discardInvalid()
@@ -233,6 +237,7 @@ class UiSession(
         views.remove(node.view)
         node.parent?.let { parent ->
             unreserve(parent, node.key)
+            children[parent]?.remove(ref.identity)
             if (node.ownership != NativeOwnership.BORROWED && node.view.parent === parent) {
                 try { parent.removeView(node.view) } catch (t: Throwable) { failures += t }
             }
@@ -259,7 +264,7 @@ class UiSession(
         try { scheduler.close() } catch (t: Throwable) { failures += t }
         nodes.keys.toList().asReversed().forEach { id -> nodes[id]?.let { node -> try { release(ViewRef(this, id, node.key, node.component)) } catch (t: Throwable) { failures += t } } }
         try { runCleanup(sessionCleanup) } catch (t: Throwable) { failures += t }
-        nodes.clear(); parentKeys.clear(); views.clear(); environmentValue = null
+        nodes.clear(); parentKeys.clear(); views.clear(); children.clear(); environmentValue = null
         closeReceipt.completed = true
         if (failures.isNotEmpty()) { closeReceipt.failure = failures.first(); throwCombined(failures) }
     }
