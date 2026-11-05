@@ -37,20 +37,21 @@ class LatestWorkTest {
         assertEquals(listOf(1998), committed)
     }
 
-    @Test fun closeDropsCompletionAndPending() {
-        val background = Queue(); val owner = Queue(); val applied = mutableListOf<Int>()
-        val work = LatestWork(background, owner, { n: Int -> n }, { _, n -> applied += n }, { throw it })
-        work.submit(1); work.submit(2); work.close()
-        background.runBackground(); owner.run()
-        assertTrue(applied.isEmpty())
-        assertTrue(background.tasks.isEmpty())
-    }
-
-    @Test fun closeBeforeOwnerDeliveryPreventsCommit() {
-        val background = Queue(); val owner = Queue(); val applied = mutableListOf<Int>()
-        val work = LatestWork(background, owner, { n: Int -> n }, { _, n -> applied += n }, { throw it })
-        work.submit(1); background.runBackground(); work.close(); owner.run()
-        assertTrue(applied.isEmpty())
+    @Test fun closeDropsCompletionAndPendingBeforeOrAfterOwnerDelivery() {
+        run {
+            val background = Queue(); val owner = Queue(); val applied = mutableListOf<Int>()
+            val work = LatestWork(background, owner, { n: Int -> n }, { _, n -> applied += n }, { throw it })
+            work.submit(1); work.submit(2); work.close()
+            background.runBackground(); owner.run()
+            assertTrue(applied.isEmpty())
+            assertTrue(background.tasks.isEmpty())
+        }
+        run {
+            val background = Queue(); val owner = Queue(); val applied = mutableListOf<Int>()
+            val work = LatestWork(background, owner, { n: Int -> n }, { _, n -> applied += n }, { throw it })
+            work.submit(1); background.runBackground(); work.close(); owner.run()
+            assertTrue(applied.isEmpty())
+        }
     }
 
     @Test fun rejectedExecutorIsReported() {
@@ -71,24 +72,25 @@ class LatestWorkTest {
         assertTrue(error.cause is RejectedExecutionException)
     }
 
-    @Test fun synchronousBackgroundIsRejectedAndWrongOwnerThreadCloses() {
-        val failures = mutableListOf<Throwable>()
-        val inline = LatestWork<Int, Int>(Executor { it.run() }, Queue(), { it }, { _, _ -> }, { failures += it })
-        inline.submit(1)
-        assertEquals(1, failures.size)
-        val background = Queue()
-        val wrongOwner = LatestWork<Int, Int>(background, Executor { it.run() }, { it }, { _, _ -> }, { throw it })
-        wrongOwner.submit(1)
-        background.runBackground()
-        assertThrows(IllegalStateException::class.java) { wrongOwner.submit(2) }
-    }
-
-    @Test fun delayedBackgroundOnOwnerThreadIsRejected() {
-        val background = Queue()
-        val work = LatestWork<Int, Int>(background, Queue(), { it }, { _, _ -> }, { throw it })
-        work.submit(1)
-        background.run()
-        assertThrows(IllegalStateException::class.java) { work.submit(2) }
+    @Test fun synchronousOrDelayedBackgroundOnOwnerThreadIsRejected() {
+        run {
+            val failures = mutableListOf<Throwable>()
+            val inline = LatestWork<Int, Int>(Executor { it.run() }, Queue(), { it }, { _, _ -> }, { failures += it })
+            inline.submit(1)
+            assertEquals(1, failures.size)
+            val background = Queue()
+            val wrongOwner = LatestWork<Int, Int>(background, Executor { it.run() }, { it }, { _, _ -> }, { throw it })
+            wrongOwner.submit(1)
+            background.runBackground()
+            assertThrows(IllegalStateException::class.java) { wrongOwner.submit(2) }
+        }
+        run {
+            val background = Queue()
+            val work = LatestWork<Int, Int>(background, Queue(), { it }, { _, _ -> }, { throw it })
+            work.submit(1)
+            background.run()
+            assertThrows(IllegalStateException::class.java) { work.submit(2) }
+        }
     }
 
     @Test fun pendingSlotIsReusedAndOnlyLatestValueRuns() {

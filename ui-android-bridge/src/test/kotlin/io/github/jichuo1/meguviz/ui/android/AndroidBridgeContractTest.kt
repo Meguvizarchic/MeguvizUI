@@ -132,21 +132,37 @@ class AndroidBridgeContractTest {
         upstream.close()
     }
 
-    @Test fun upstreamSchedulerCloseInvalidatesUiAndReleasesPendingCallbacks() {
-        val clock = PlatformClock()
-        val upstream = clock.scheduler()
-        val driver = AndroidFrameDriver(clock, upstream, Any())
-        val ui = UiScheduler(driver, clock::checkOwner, nanoTime = { 0 })
-        var closed = 0
-        driver.onClose { closed++; ui.close() }
-        ui.submitCommand { fail("Closed session committed") }
-        upstream.close()
-        assertTrue(driver.isClosed)
-        assertEquals(SchedulerState.CLOSED, ui.state)
-        assertEquals(0, ui.pendingCommandCount)
-        assertFalse(clock.hasFrame())
-        driver.close(); upstream.close()
-        assertEquals(1, closed)
+    @Test fun upstreamCloseInvalidatesUiAndPreventsLaterCommit() {
+        run {
+            val clock = PlatformClock()
+            val upstream = clock.scheduler()
+            val driver = AndroidFrameDriver(clock, upstream, Any())
+            val ui = UiScheduler(driver, clock::checkOwner, nanoTime = { 0 })
+            var closed = 0
+            driver.onClose { closed++; ui.close() }
+            ui.submitCommand { fail("Closed session committed") }
+            upstream.close()
+            assertTrue(driver.isClosed)
+            assertEquals(SchedulerState.CLOSED, ui.state)
+            assertEquals(0, ui.pendingCommandCount)
+            assertFalse(clock.hasFrame())
+            driver.close(); upstream.close()
+            assertEquals(1, closed)
+        }
+        run {
+            val clock = PlatformClock()
+            val upstream = clock.scheduler()
+            val driver = AndroidFrameDriver(clock, upstream, Any())
+            val ui = UiScheduler(driver, clock::checkOwner, nanoTime = { 0 })
+            driver.onClose(ui::close)
+            val calls = mutableListOf<String>()
+            ui.submitCommand { calls += "entered"; upstream.close(); calls += "existing callback completed" }
+            ui.submitCommand { calls += "never" }
+            clock.tick()
+            assertEquals(listOf("entered", "existing callback completed"), calls)
+            assertEquals(SchedulerState.CLOSED, ui.state)
+            assertEquals(0, upstream.channelCount())
+        }
     }
 
     @Test fun closingOneBorrowerKeepsTheSharedSchedulerAndOtherUiAlive() {
@@ -162,21 +178,6 @@ class AndroidBridgeContractTest {
         clock.tick()
         assertEquals(1, secondCalls)
         second.close(); upstream.close()
-    }
-
-    @Test fun closeDuringUiCallbackPreventsLaterLibraryCommit() {
-        val clock = PlatformClock()
-        val upstream = clock.scheduler()
-        val driver = AndroidFrameDriver(clock, upstream, Any())
-        val ui = UiScheduler(driver, clock::checkOwner, nanoTime = { 0 })
-        driver.onClose(ui::close)
-        val calls = mutableListOf<String>()
-        ui.submitCommand { calls += "entered"; upstream.close(); calls += "existing callback completed" }
-        ui.submitCommand { calls += "never" }
-        clock.tick()
-        assertEquals(listOf("entered", "existing callback completed"), calls)
-        assertEquals(SchedulerState.CLOSED, ui.state)
-        assertEquals(0, upstream.channelCount())
     }
 
     @Test fun resourceAuthorityUsesActualUpstreamDomainAndThemeInvalidation() {

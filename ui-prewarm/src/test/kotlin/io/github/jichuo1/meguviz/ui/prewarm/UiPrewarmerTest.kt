@@ -27,15 +27,27 @@ class UiPrewarmerTest {
         assertEquals(0, driver.pendingCount)
     }
 
-    @Test fun capacityRejectionLeavesOwnershipWithCallerAndCancelClearsPending() {
-        val queue = UiPrewarmer(scheduler, {}, capacity = 1, maxUnitNanos = Long.MAX_VALUE)
-        assertEquals(PrewarmSubmission.Accepted, queue.submit(work()))
-        assertEquals(PrewarmSubmission.AtCapacity, queue.submit(work()))
-        queue.cancel()
-        assertEquals(listOf("discard:CANCELLED"), events)
-        assertEquals(0, driver.pendingCount)
-        driver.tick()
-        assertEquals(1, events.size)
+    @Test fun rejectedSubmissionLeavesOwnershipWithCaller() {
+        run {
+            val queue = UiPrewarmer(scheduler, {}, capacity = 1, maxUnitNanos = Long.MAX_VALUE)
+            assertEquals(PrewarmSubmission.Accepted, queue.submit(work()))
+            assertEquals(PrewarmSubmission.AtCapacity, queue.submit(work()))
+            queue.cancel()
+            assertEquals(listOf("discard:CANCELLED"), events)
+            assertEquals(0, driver.pendingCount)
+            driver.tick()
+            assertEquals(1, events.size)
+        }
+        events.clear()
+        run {
+            val driver = VirtualFrameDriver()
+            val full = UiScheduler(driver, {}, commandCapacity = 1, nanoTime = { 0L })
+            full.submitCommand {}
+            val queue = UiPrewarmer(full, {})
+            assertEquals(PrewarmSubmission.SchedulerUnavailable, queue.submit(work()))
+            assertEquals(0, queue.pendingCount)
+            assertTrue(events.isEmpty())
+        }
     }
 
     @Test fun changedGenerationIsDiscardedBeforeAndAfterAUnit() {
@@ -76,27 +88,29 @@ class UiPrewarmerTest {
         assertEquals(0, driver.pendingCount)
     }
 
-    @Test fun reentrantCancelReleasesInFlightOnlyAfterUnitReturns() {
-        val queue = UiPrewarmer(scheduler, {}, maxUnitNanos = Long.MAX_VALUE)
-        queue.submit(work(step = {
-            events += "before"
-            queue.cancel()
-            events += "after"
-            true
-        }))
-        driver.tick()
-        assertEquals(listOf("before", "after", "discard:CANCELLED"), events)
-        assertEquals(0, driver.pendingCount)
-    }
-
-    @Test fun fullSchedulerRejectsWithoutTakingWorkOwnership() {
-        val driver = VirtualFrameDriver()
-        val full = UiScheduler(driver, {}, commandCapacity = 1, nanoTime = { 0L })
-        full.submitCommand {}
-        val queue = UiPrewarmer(full, {})
-        assertEquals(PrewarmSubmission.SchedulerUnavailable, queue.submit(work()))
-        assertEquals(0, queue.pendingCount)
-        assertTrue(events.isEmpty())
+    @Test fun reentrantCancelAndCloseDeferReleaseUntilUnitReturns() {
+        run {
+            val queue = UiPrewarmer(scheduler, {}, maxUnitNanos = Long.MAX_VALUE)
+            queue.submit(work(step = {
+                events += "before"
+                queue.cancel()
+                events += "after"
+                true
+            }))
+            driver.tick()
+            assertEquals(listOf("before", "after", "discard:CANCELLED"), events)
+            assertEquals(0, driver.pendingCount)
+        }
+        events.clear()
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = UiScheduler(driver, {}, nanoTime = { 0L })
+            val queue = UiPrewarmer(scheduler, {}, maxUnitNanos = Long.MAX_VALUE)
+            queue.submit(work(step = { events += "before"; queue.close(); events += "after"; true }))
+            driver.tick()
+            assertEquals(listOf("before", "after", "discard:CLOSED"), events)
+            assertEquals(PrewarmSubmission.Closed, queue.submit(work()))
+        }
     }
 
     @Test fun failureDiscardsCurrentAndRemainingTasksWithoutPublishing() {
@@ -121,14 +135,6 @@ class UiPrewarmerTest {
         assertTrue(failure is IllegalStateException)
         assertEquals(0, queue.pendingCount)
         assertEquals(0, driver.pendingCount)
-    }
-
-    @Test fun closeInWorkDefersReleaseUntilUnitReturns() {
-        val queue = UiPrewarmer(scheduler, {}, maxUnitNanos = Long.MAX_VALUE)
-        queue.submit(work(step = { events += "before"; queue.close(); events += "after"; true }))
-        driver.tick()
-        assertEquals(listOf("before", "after", "discard:CLOSED"), events)
-        assertEquals(PrewarmSubmission.Closed, queue.submit(work()))
     }
 
     @Test fun reentrantCancelCleanupFailureDoesNotReplaceWorkFailure() {

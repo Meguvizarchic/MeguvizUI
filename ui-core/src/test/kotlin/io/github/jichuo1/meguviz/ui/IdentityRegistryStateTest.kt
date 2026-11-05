@@ -31,28 +31,29 @@ class IdentityRegistryStateTest {
         component, ViewFactory { error("Installation must not construct a View") },
     )
 
-    @Test fun epochDomainsAreIndependentAndOldTokensExpire() {
-        val first = EpochDomain()
-        val second = EpochDomain()
-        val before = first.token()
-        val untouched = second.token()
-        assertNotEquals(before, untouched)
-        first.advance()
-        assertNotEquals(before, first.token())
-        assertEquals(untouched, second.token())
-    }
-
-    @Test fun epochOverflowReplacesIdentityInsteadOfRevivingEpochZero() {
-        val domain = EpochDomain()
-        val zero = domain.token()
-        val counter = EpochDomain::class.java.getDeclaredField("epoch")
-        counter.isAccessible = true
-        counter.setLong(domain, Long.MAX_VALUE)
-        val maximum = domain.token()
-        domain.advance()
-        assertNotEquals(zero, domain.token())
-        assertNotEquals(maximum, domain.token())
-        assertEquals(domain.token(), domain.token())
+    @Test fun epochDomainsAreIndependentAndOverflowReplacesIdentity() {
+        run {
+            val first = EpochDomain()
+            val second = EpochDomain()
+            val before = first.token()
+            val untouched = second.token()
+            assertNotEquals(before, untouched)
+            first.advance()
+            assertNotEquals(before, first.token())
+            assertEquals(untouched, second.token())
+        }
+        run {
+            val domain = EpochDomain()
+            val zero = domain.token()
+            val counter = EpochDomain::class.java.getDeclaredField("epoch")
+            counter.isAccessible = true
+            counter.setLong(domain, Long.MAX_VALUE)
+            val maximum = domain.token()
+            domain.advance()
+            assertNotEquals(zero, domain.token())
+            assertNotEquals(maximum, domain.token())
+            assertEquals(domain.token(), domain.token())
+        }
     }
 
     @Test fun mvxX01AmbiguousProvidersFailBeforeAnyConstruction() {
@@ -116,35 +117,36 @@ class IdentityRegistryStateTest {
         assertEquals("base", snapshot.resolve(type).providerId)
     }
 
-    @Test fun nativeIdTableRoundTripsAndSkipsOccupiedIdsWithoutHashingKeys() {
-        val store = StableIdStore()
-        val first = NodeIdentity("root/FB", "text", 1)
-        val second = NodeIdentity("root/Ea", "text", 1)
-        assertEquals(first.path.hashCode(), second.path.hashCode())
-        val firstId = store.idFor(first, occupied = setOf(1, 2))
-        val secondId = store.idFor(second, occupied = setOf(1, 2))
-        assertEquals(3, firstId)
-        assertEquals(4, secondId)
-        val restored = StableIdStore(store.snapshot())
-        assertEquals(firstId, restored.idFor(first))
-        assertEquals(secondId, restored.idFor(second))
-        assertThrows(IllegalArgumentException::class.java) { restored.idFor(first, occupied = setOf(firstId)) }
-    }
-
-    @Test fun nativeIdTableRejectsDuplicateIdsPathsAndIncompatibleComponent() {
-        val first = NodeIdentity("root/a", "text", 1)
-        val second = NodeIdentity("root/b", "text", 1)
-        assertThrows(IllegalArgumentException::class.java) { StableIdStore(mapOf(first to 7, second to 7)) }
-        assertThrows(IllegalArgumentException::class.java) { StableIdStore(mapOf(first to 0)) }
-        assertThrows(IllegalArgumentException::class.java) { StableIdStore(mapOf(first to 0x7f010001)) }
-        assertThrows(IllegalArgumentException::class.java) {
-            StableIdStore(mapOf(first to 1, first.copy(component = "button") to 2))
+    @Test fun nativeIdTableRoundTripsAndRejectsDuplicateOrIncompatibleEntries() {
+        run {
+            val store = StableIdStore()
+            val first = NodeIdentity("root/FB", "text", 1)
+            val second = NodeIdentity("root/Ea", "text", 1)
+            assertEquals(first.path.hashCode(), second.path.hashCode())
+            val firstId = store.idFor(first, occupied = setOf(1, 2))
+            val secondId = store.idFor(second, occupied = setOf(1, 2))
+            assertEquals(3, firstId)
+            assertEquals(4, secondId)
+            val restored = StableIdStore(store.snapshot())
+            assertEquals(firstId, restored.idFor(first))
+            assertEquals(secondId, restored.idFor(second))
+            assertThrows(IllegalArgumentException::class.java) { restored.idFor(first, occupied = setOf(firstId)) }
         }
-        val store = StableIdStore(mapOf(first to 7))
-        val changed = first.copy(schema = 2)
-        assertThrows(IllegalArgumentException::class.java) { store.idFor(changed) }
-        store.rebuild(first.path)
-        assertTrue(store.idFor(changed) > 0)
+        run {
+            val first = NodeIdentity("root/a", "text", 1)
+            val second = NodeIdentity("root/b", "text", 1)
+            assertThrows(IllegalArgumentException::class.java) { StableIdStore(mapOf(first to 7, second to 7)) }
+            assertThrows(IllegalArgumentException::class.java) { StableIdStore(mapOf(first to 0)) }
+            assertThrows(IllegalArgumentException::class.java) { StableIdStore(mapOf(first to 0x7f010001)) }
+            assertThrows(IllegalArgumentException::class.java) {
+                StableIdStore(mapOf(first to 1, first.copy(component = "button") to 2))
+            }
+            val store = StableIdStore(mapOf(first to 7))
+            val changed = first.copy(schema = 2)
+            assertThrows(IllegalArgumentException::class.java) { store.idFor(changed) }
+            store.rebuild(first.path)
+            assertTrue(store.idFor(changed) > 0)
+        }
     }
 
     @Test fun stateContainersCopyMutableInputsAndCannotBeMutatedThroughJavaViews() {

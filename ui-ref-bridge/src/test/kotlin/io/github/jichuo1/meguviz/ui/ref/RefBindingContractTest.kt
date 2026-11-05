@@ -151,71 +151,73 @@ class RefBindingContractTest {
         }
     }
 
-    @Test fun closingLeaseImmediatelyRemovesItsQueuedCallsFromTheOwningScheduler() {
-        scope().use { code ->
-            val driver = VirtualFrameDriver()
-            val scheduler = UiScheduler(driver, {})
-            session(code, scheduler::discardInvalid).use { binding ->
+    @Test fun closingLeaseOrMethodInvalidatesOnlyItsPendingSchedulerCommands() {
+        run {
+            scope().use { code ->
+                val driver = VirtualFrameDriver()
+                val scheduler = UiScheduler(driver, {})
+                session(code, scheduler::discardInvalid).use { binding ->
+                    val receiver = Receiver()
+                    val lease = binding.receiver(receiver)
+                    val method = lease.method(query("add", Integer.TYPE))
+                    scheduler.submitBatch(listOf(method.operation("pending", 2)))
+                    assertEquals(1, scheduler.pendingCommandCount)
+                    lease.close()
+                    assertFalse(lease.retainsReceiver)
+                    assertEquals(0, scheduler.pendingCommandCount)
+                    assertEquals(0, driver.pendingCount)
+                    assertEquals(0, receiver.calls)
+                }
+                scheduler.close()
+            }
+        }
+        run {
+            scope().use { code ->
+                val driver = VirtualFrameDriver()
+                val scheduler = UiScheduler(driver, {})
+                session(code, scheduler::discardInvalid).use { binding ->
+                    val lease = binding.receiver(Receiver())
+                    val method = lease.method(query("add", Integer.TYPE))
+                    scheduler.submitBatch(listOf(method.operation("pending", 2)))
+                    method.close()
+                    assertEquals(0, scheduler.pendingCommandCount)
+                    assertTrue(lease.isCurrent())
+                    assertEquals(3, lease.method(query("add", Integer.TYPE)).invoke(3))
+                }
+                scheduler.close()
+            }
+        }
+    }
+
+    @Test fun ownerThreadGuardsRejectCrossThreadInvokeAndReentrantClose() {
+        run {
+            scope().use { code -> session(code).use { binding ->
                 val receiver = Receiver()
                 val lease = binding.receiver(receiver)
                 val method = lease.method(query("add", Integer.TYPE))
-                scheduler.submitBatch(listOf(method.operation("pending", 2)))
-                assertEquals(1, scheduler.pendingCommandCount)
-                lease.close()
-                assertFalse(lease.retainsReceiver)
-                assertEquals(0, scheduler.pendingCommandCount)
-                assertEquals(0, driver.pendingCount)
+                val failures = AtomicReference<List<Throwable>>()
+                Thread {
+                    failures.set(listOfNotNull(runCatching { method.invoke(1) }.exceptionOrNull(), runCatching { lease.close() }.exceptionOrNull()))
+                }.apply { start(); join() }
+                assertEquals(2, failures.get().size)
+                assertTrue(failures.get().all { it is IllegalStateException })
                 assertEquals(0, receiver.calls)
-            }
-            scheduler.close()
+                assertTrue(lease.retainsReceiver)
+            } }
         }
-    }
-
-    @Test fun closingMethodAlsoInvalidatesOnlyItsPendingCommands() {
-        scope().use { code ->
-            val driver = VirtualFrameDriver()
-            val scheduler = UiScheduler(driver, {})
-            session(code, scheduler::discardInvalid).use { binding ->
-                val lease = binding.receiver(Receiver())
+        run {
+            scope().use { code ->
+                val binding = session(code)
+                val receiver = Receiver()
+                var closing = false
+                val lease = binding.receiver(receiver) { if (closing) binding.close(); true }
                 val method = lease.method(query("add", Integer.TYPE))
-                scheduler.submitBatch(listOf(method.operation("pending", 2)))
-                method.close()
-                assertEquals(0, scheduler.pendingCommandCount)
-                assertTrue(lease.isCurrent())
-                assertEquals(3, lease.method(query("add", Integer.TYPE)).invoke(3))
+                closing = true
+                assertFalse(method.isCurrent())
+                assertThrows(IllegalStateException::class.java) { method.invoke(1) }
+                assertEquals(0, receiver.calls)
+                assertFalse(lease.retainsReceiver)
             }
-            scheduler.close()
-        }
-    }
-
-    @Test fun nonOwnerThreadCannotInvokeOrCloseALiveLease() {
-        scope().use { code -> session(code).use { binding ->
-            val receiver = Receiver()
-            val lease = binding.receiver(receiver)
-            val method = lease.method(query("add", Integer.TYPE))
-            val failures = AtomicReference<List<Throwable>>()
-            Thread {
-                failures.set(listOfNotNull(runCatching { method.invoke(1) }.exceptionOrNull(), runCatching { lease.close() }.exceptionOrNull()))
-            }.apply { start(); join() }
-            assertEquals(2, failures.get().size)
-            assertTrue(failures.get().all { it is IllegalStateException })
-            assertEquals(0, receiver.calls)
-            assertTrue(lease.retainsReceiver)
-        } }
-    }
-
-    @Test fun reentrantCloseInValidityCheckCannotStartAControlledCall() {
-        scope().use { code ->
-            val binding = session(code)
-            val receiver = Receiver()
-            var closing = false
-            val lease = binding.receiver(receiver) { if (closing) binding.close(); true }
-            val method = lease.method(query("add", Integer.TYPE))
-            closing = true
-            assertFalse(method.isCurrent())
-            assertThrows(IllegalStateException::class.java) { method.invoke(1) }
-            assertEquals(0, receiver.calls)
-            assertFalse(lease.retainsReceiver)
         }
     }
 

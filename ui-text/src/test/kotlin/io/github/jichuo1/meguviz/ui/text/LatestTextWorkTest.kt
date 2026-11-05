@@ -65,23 +65,24 @@ class LatestTextWorkTest {
         assertTrue(error.cause is RejectedExecutionException)
     }
 
-    @Test fun synchronousBackgroundIsRejectedAndWrongOwnerThreadCloses() {
-        val failures = mutableListOf<Throwable>()
-        val inline = LatestTextWork<Int, Int>(Executor { it.run() }, Queue(), { it }, { _, result -> result.exceptionOrNull()?.let(failures::add) })
-        inline.submit(1)
-        assertEquals(1, failures.size)
-        val background = Queue()
-        val wrongOwner = LatestTextWork<Int, Int>(background, Executor { it.run() }, { it }, { _, _ -> })
-        wrongOwner.submit(1)
-        background.runBackground()
-        assertThrows(IllegalStateException::class.java) { wrongOwner.submit(2) }
-    }
-
-    @Test fun delayedBackgroundOnOwnerThreadIsRejected() {
-        val background = Queue()
-        val work = LatestTextWork<Int, Int>(background, Queue(), { it }, { _, _ -> })
-        work.submit(1)
-        background.run()
-        assertThrows(IllegalStateException::class.java) { work.submit(2) }
+    @Test fun synchronousOrDelayedBackgroundOnOwnerThreadIsRejected() {
+        run {
+            val failures = mutableListOf<Throwable>()
+            val inline = LatestTextWork<Int, Int>(Executor { it.run() }, Queue(), { it }, { _, result -> result.exceptionOrNull()?.let(failures::add) })
+            inline.submit(1)
+            assertEquals(1, failures.size)
+            val background = Queue()
+            val wrongOwner = LatestTextWork<Int, Int>(background, Executor { it.run() }, { it }, { _, _ -> })
+            wrongOwner.submit(1)
+            background.runBackground()
+            assertThrows(IllegalStateException::class.java) { wrongOwner.submit(2) }
+        }
+        run {
+            val background = Queue()
+            val work = LatestTextWork<Int, Int>(background, Queue(), { it }, { _, _ -> })
+            work.submit(1)
+            background.run()
+            assertThrows(IllegalStateException::class.java) { work.submit(2) }
+        }
     }
 }

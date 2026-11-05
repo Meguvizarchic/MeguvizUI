@@ -117,92 +117,128 @@ class SchedulerContractTest {
         assertEquals(listOf("set", "focus", "reconciled"), log)
     }
 
-    @Test fun staleTokenDoesNotWriteAndValidationFailureFaults() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver)
-        var writes = 0
-        scheduler.submitState("stale", isValid = { false }) { writes++ }
-        scheduler.submitCommand(isValid = { error("token check failed") }) { writes++ }
-        driver.tick()
-        assertEquals(0, writes)
-        assertEquals(1L, scheduler.counters.staleOperations)
-        assertEquals("validation", scheduler.failure!!.phase)
-        assertEquals(SchedulerState.FAULTED, scheduler.state)
-    }
-
-    @Test fun closeDuringActionPreventsAnyLaterCommitAndRejectsReentry() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver)
-        val log = mutableListOf<String>()
-        var afterClose: SubmitResult? = null
-        scheduler.submitCommand {
-            log += "entered"
-            scheduler.close()
-            afterClose = scheduler.submitCommand { log += "reentrant" }
-            log += "existing-callback-finished"
+    @Test fun staleTokenValidationAndInlineDriverFaultsAreObservable() {
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver)
+            var writes = 0
+            scheduler.submitState("stale", isValid = { false }) { writes++ }
+            scheduler.submitCommand(isValid = { error("token check failed") }) { writes++ }
+            driver.tick()
+            assertEquals(0, writes)
+            assertEquals(1L, scheduler.counters.staleOperations)
+            assertEquals("validation", scheduler.failure!!.phase)
+            assertEquals(SchedulerState.FAULTED, scheduler.state)
         }
-        scheduler.submitCommand { log += "never" }
-        driver.tick()
-        assertEquals(listOf("entered", "existing-callback-finished"), log)
-        assertEquals(SubmitResult.Rejected(RejectionReason.CLOSED), afterClose)
-        assertEquals(0, scheduler.pendingCommandCount)
-        assertEquals(0, driver.pendingCount)
-        scheduler.close()
-    }
-
-    @Test fun closeDuringValidationPreventsAction() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver)
-        var writes = 0
-        scheduler.submitCommand(isValid = { scheduler.close(); true }) { writes++ }
-        driver.tick()
-        assertEquals(0, writes)
-    }
-
-    @Test fun cancelInvalidatesBeforeBestEffortPhysicalRemoval() {
-        var delivered: ((FrameBudget) -> Unit)? = null
-        var cancelled = false
-        val driver = object : UiFrameDriver {
-            override val owner = "test.racing"
-            override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
-                delivered = callback
-                return FrameTicket { cancelled = true }
+        run {
+            val driver = object : UiFrameDriver {
+                override val owner = "test.invalid-inline"
+                override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
+                    callback(FrameBudget(0))
+                    return FrameTicket {}
+                }
             }
+            val scheduler = UiScheduler(driver, {})
+            var writes = 0
+            scheduler.submitCommand { writes++ }
+            assertEquals(0, writes)
+            assertEquals(SchedulerState.FAULTED, scheduler.state)
+            assertEquals("driver", scheduler.failure!!.phase)
         }
-        val scheduler = UiScheduler(driver, {}, nanoTime = { 0 })
-        var writes = 0
-        scheduler.submitCommand { writes++ }
-        scheduler.close()
-        delivered!!(FrameBudget(0))
-        assertTrue(cancelled)
-        assertEquals(0, writes)
-        assertEquals(1L, scheduler.counters.releasedOperations)
     }
 
-    @Test fun pauseClearsPendingAndResumingDoesNotReplayIt() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver)
-        var writes = 0
-        scheduler.submitCommand { writes++ }
-        scheduler.pause()
-        assertEquals(SubmitResult.Rejected(RejectionReason.PAUSED), scheduler.submitCommand {})
-        assertEquals(0, driver.pendingCount)
-        scheduler.resume()
-        driver.tick()
-        assertEquals(0, writes)
+    @Test fun closeDuringActionOrValidationPreventsCommitAndRejectsReentry() {
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver)
+            val log = mutableListOf<String>()
+            var afterClose: SubmitResult? = null
+            scheduler.submitCommand {
+                log += "entered"
+                scheduler.close()
+                afterClose = scheduler.submitCommand { log += "reentrant" }
+                log += "existing-callback-finished"
+            }
+            scheduler.submitCommand { log += "never" }
+            driver.tick()
+            assertEquals(listOf("entered", "existing-callback-finished"), log)
+            assertEquals(SubmitResult.Rejected(RejectionReason.CLOSED), afterClose)
+            assertEquals(0, scheduler.pendingCommandCount)
+            assertEquals(0, driver.pendingCount)
+            scheduler.close()
+        }
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver)
+            var writes = 0
+            scheduler.submitCommand(isValid = { scheduler.close(); true }) { writes++ }
+            driver.tick()
+            assertEquals(0, writes)
+        }
     }
 
-    @Test fun explicitRetainingPauseResumesTheOriginalFifo() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver)
-        val log = mutableListOf<Int>()
-        scheduler.submitCommand { log += 1; scheduler.pause(clearPending = false) }
-        scheduler.submitCommand { log += 2 }
-        driver.tick()
-        assertEquals(listOf(1), log)
-        scheduler.resume()
-        driver.tick()
-        assertEquals(listOf(1, 2), log)
+    @Test fun cancelInvalidatesBeforeRemovalAndReentryWaitsForAnotherTick() {
+        run {
+            var delivered: ((FrameBudget) -> Unit)? = null
+            var cancelled = false
+            val driver = object : UiFrameDriver {
+                override val owner = "test.racing"
+                override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
+                    delivered = callback
+                    return FrameTicket { cancelled = true }
+                }
+            }
+            val scheduler = UiScheduler(driver, {}, nanoTime = { 0 })
+            var writes = 0
+            scheduler.submitCommand { writes++ }
+            scheduler.close()
+            delivered!!(FrameBudget(0))
+            assertTrue(cancelled)
+            assertEquals(0, writes)
+            assertEquals(1L, scheduler.counters.releasedOperations)
+        }
+        run {
+            val driver = VirtualFrameDriver()
+            val log = mutableListOf<Int>()
+            driver.requestFrame { log += 9 }.cancel()
+            driver.requestFrame {
+                log += 1
+                driver.requestFrame { log += 2 }
+            }
+            driver.tick()
+            assertEquals(listOf(1), log)
+            assertEquals(1, driver.pendingCount)
+            driver.tick()
+            assertEquals(listOf(1, 2), log)
+            assertEquals(listOf("request:1", "cancel:1", "request:2", "tick:2", "request:3", "tick:3"), driver.events)
+        }
+    }
+
+    @Test fun pauseClearsOrRetainsPendingAndResumeDoesNotReplayClearedWork() {
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver)
+            var writes = 0
+            scheduler.submitCommand { writes++ }
+            scheduler.pause()
+            assertEquals(SubmitResult.Rejected(RejectionReason.PAUSED), scheduler.submitCommand {})
+            assertEquals(0, driver.pendingCount)
+            scheduler.resume()
+            driver.tick()
+            assertEquals(0, writes)
+        }
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver)
+            val log = mutableListOf<Int>()
+            scheduler.submitCommand { log += 1; scheduler.pause(clearPending = false) }
+            scheduler.submitCommand { log += 2 }
+            driver.tick()
+            assertEquals(listOf(1), log)
+            scheduler.resume()
+            driver.tick()
+            assertEquals(listOf(1, 2), log)
+        }
     }
 
     @Test fun countBudgetAlternatesChannelsWithoutReorderingCommands() {
@@ -244,38 +280,6 @@ class SchedulerContractTest {
         assertEquals(1L, scheduler.counters.coalescedStates)
     }
 
-    @Test fun virtualDriverCancelReleasesAndReentryWaitsForAnotherTick() {
-        val driver = VirtualFrameDriver()
-        val log = mutableListOf<Int>()
-        driver.requestFrame { log += 9 }.cancel()
-        driver.requestFrame {
-            log += 1
-            driver.requestFrame { log += 2 }
-        }
-        driver.tick()
-        assertEquals(listOf(1), log)
-        assertEquals(1, driver.pendingCount)
-        driver.tick()
-        assertEquals(listOf(1, 2), log)
-        assertEquals(listOf("request:1", "cancel:1", "request:2", "tick:2", "request:3", "tick:3"), driver.events)
-    }
-
-    @Test fun inlineDriverDeliveryIsAnObservableFault() {
-        val driver = object : UiFrameDriver {
-            override val owner = "test.invalid-inline"
-            override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
-                callback(FrameBudget(0))
-                return FrameTicket {}
-            }
-        }
-        val scheduler = UiScheduler(driver, {})
-        var writes = 0
-        scheduler.submitCommand { writes++ }
-        assertEquals(0, writes)
-        assertEquals(SchedulerState.FAULTED, scheduler.state)
-        assertEquals("driver", scheduler.failure!!.phase)
-    }
-
     @Test fun ownerCheckIsAppliedToSubmissionAndClose() {
         val driver = VirtualFrameDriver()
         var owner = true
@@ -297,77 +301,79 @@ class SchedulerContractTest {
         assertEquals(listOf("a0", "b", "c"), log)
     }
 
-    @Test fun discardInvalidReleasesClosureCapacityAndCancelsEmptyFrame() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver, stateCapacity = 1, commandCapacity = 2)
-        var valid = true
-        scheduler.submitState("a", { valid }) { fail("stale state applied") }
-        scheduler.submitBatch(listOf(
-            ScheduledOperation("a", { valid }) { fail("stale batch applied") },
-            ScheduledOperation("b", { valid }) { fail("stale batch applied") },
-        ))
-        valid = false
-        scheduler.discardInvalid()
-        assertEquals(0, scheduler.pendingStateCount)
-        assertEquals(0, scheduler.pendingCommandCount)
-        assertEquals(0, driver.pendingCount)
-        assertEquals(3L, scheduler.counters.staleOperations)
-        assertEquals(3L, scheduler.counters.releasedOperations)
+    @Test fun discardInvalidReleasesCapacityAndCallbackDiscardDoesNotExecute() {
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver, stateCapacity = 1, commandCapacity = 2)
+            var valid = true
+            scheduler.submitState("a", { valid }) { fail("stale state applied") }
+            scheduler.submitBatch(listOf(
+                ScheduledOperation("a", { valid }) { fail("stale batch applied") },
+                ScheduledOperation("b", { valid }) { fail("stale batch applied") },
+            ))
+            valid = false
+            scheduler.discardInvalid()
+            assertEquals(0, scheduler.pendingStateCount)
+            assertEquals(0, scheduler.pendingCommandCount)
+            assertEquals(0, driver.pendingCount)
+            assertEquals(3L, scheduler.counters.staleOperations)
+            assertEquals(3L, scheduler.counters.releasedOperations)
+        }
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver)
+            var valid = true
+            scheduler.submitCommand { valid = false; scheduler.discardInvalid() }
+            scheduler.submitCommand({ valid }) { fail("discarded operation ran") }
+            driver.tick()
+            assertEquals(1L, scheduler.counters.appliedOperations)
+            assertEquals(1L, scheduler.counters.staleOperations)
+            assertEquals(0, scheduler.pendingCommandCount)
+        }
     }
 
-    @Test fun discardFromInsideCallbackDoesNotExecuteOrRetainInvalidSnapshot() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver)
-        var valid = true
-        scheduler.submitCommand { valid = false; scheduler.discardInvalid() }
-        scheduler.submitCommand({ valid }) { fail("discarded operation ran") }
-        driver.tick()
-        assertEquals(1L, scheduler.counters.appliedOperations)
-        assertEquals(1L, scheduler.counters.staleOperations)
-        assertEquals(0, scheduler.pendingCommandCount)
-    }
-
-    @Test fun stateCapacityCountsReentrantOverlapOnlyOnce() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver, stateCapacity = 2, maxOperations = 1)
-        val log = mutableListOf<String>()
-        scheduler.submitState("trigger") {
-            assertEquals(1, scheduler.pendingStateCount)
-            assertEquals(SubmitResult.Accepted, scheduler.submitState("target") { log += "new" })
-            assertEquals(SubmitResult.Coalesced, scheduler.submitState("target") { log += "latest" })
-            assertEquals(1, scheduler.pendingStateCount)
-            assertEquals(SubmitResult.Accepted, scheduler.submitState("extra") { log += "extra" })
+    @Test fun stateCapacityCountsReentrantOverlapAndOldSnapshotRelease() {
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver, stateCapacity = 2, maxOperations = 1)
+            val log = mutableListOf<String>()
+            scheduler.submitState("trigger") {
+                assertEquals(1, scheduler.pendingStateCount)
+                assertEquals(SubmitResult.Accepted, scheduler.submitState("target") { log += "new" })
+                assertEquals(SubmitResult.Coalesced, scheduler.submitState("target") { log += "latest" })
+                assertEquals(1, scheduler.pendingStateCount)
+                assertEquals(SubmitResult.Accepted, scheduler.submitState("extra") { log += "extra" })
+                assertEquals(2, scheduler.pendingStateCount)
+                assertEquals(SubmitResult.Rejected(RejectionReason.STATE_CAPACITY), scheduler.submitState("full") {})
+            }
+            scheduler.submitState("target") { log += "old" }
+            driver.tick()
             assertEquals(2, scheduler.pendingStateCount)
-            assertEquals(SubmitResult.Rejected(RejectionReason.STATE_CAPACITY), scheduler.submitState("full") {})
+            repeat(2) { driver.tick() }
+            assertEquals(listOf("latest", "extra"), log)
+            assertEquals(0, scheduler.pendingStateCount)
+            assertEquals(2L, scheduler.counters.coalescedStates)
         }
-        scheduler.submitState("target") { log += "old" }
-        driver.tick()
-        assertEquals(2, scheduler.pendingStateCount)
-        repeat(2) { driver.tick() }
-        assertEquals(listOf("latest", "extra"), log)
-        assertEquals(0, scheduler.pendingStateCount)
-        assertEquals(2L, scheduler.counters.coalescedStates)
-    }
-
-    @Test fun applyingOldSnapshotReleasesOverlapBeforeItsAction() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver, stateCapacity = 2)
-        val log = mutableListOf<String>()
-        scheduler.submitState("trigger") {
-            scheduler.submitState("target") { log += "new" }
-            assertEquals(1, scheduler.pendingStateCount)
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver, stateCapacity = 2)
+            val log = mutableListOf<String>()
+            scheduler.submitState("trigger") {
+                scheduler.submitState("target") { log += "new" }
+                assertEquals(1, scheduler.pendingStateCount)
+            }
+            scheduler.submitState("target") {
+                log += "old"
+                assertEquals(1, scheduler.pendingStateCount)
+                scheduler.submitState("extra") { log += "extra" }
+                assertEquals(2, scheduler.pendingStateCount)
+            }
+            driver.tick()
+            assertEquals(listOf("old"), log)
+            driver.tick()
+            assertEquals(listOf("old", "new", "extra"), log)
+            assertEquals(0, scheduler.pendingStateCount)
         }
-        scheduler.submitState("target") {
-            log += "old"
-            assertEquals(1, scheduler.pendingStateCount)
-            scheduler.submitState("extra") { log += "extra" }
-            assertEquals(2, scheduler.pendingStateCount)
-        }
-        driver.tick()
-        assertEquals(listOf("old"), log)
-        driver.tick()
-        assertEquals(listOf("old", "new", "extra"), log)
-        assertEquals(0, scheduler.pendingStateCount)
     }
 
     @Test fun discardSnapshotOverlapKeepsTheNewStateAndGroupRotation() {
@@ -499,37 +505,38 @@ class SchedulerContractTest {
         assertEquals(0, scheduler.pendingStateCount)
     }
 
-    @Test fun faultDuringCommandOnlyFrameClearsSpareQueuesAndRecovers() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver, maxOperations = 4)
-        val log = mutableListOf<String>()
-        scheduler.submitCommand {
-            log += "first"
-            error("boom")
-        }
-        scheduler.submitCommand { log += "never" }
-        driver.tick()
-        assertEquals(SchedulerState.FAULTED, scheduler.state)
-        assertEquals(0, scheduler.pendingStateCount)
-        assertEquals(0, scheduler.pendingCommandCount)
-        scheduler.recover()
-        scheduler.submitCommand { log += "recovered" }
-        driver.tick()
-        assertEquals(listOf("first", "recovered"), log)
-    }
-
-    @Test fun spareQueuesSurviveMultipleFullDrains() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver, maxOperations = 2)
-        val log = mutableListOf<Int>()
-        repeat(4) { round ->
-            scheduler.submitState("s") { log += round }
-            scheduler.submitCommand { log += round * 10 }
+    @Test fun faultClearsSpareQueuesAndTheySurviveMultipleFullDrains() {
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver, maxOperations = 4)
+            val log = mutableListOf<String>()
+            scheduler.submitCommand {
+                log += "first"
+                error("boom")
+            }
+            scheduler.submitCommand { log += "never" }
             driver.tick()
+            assertEquals(SchedulerState.FAULTED, scheduler.state)
+            assertEquals(0, scheduler.pendingStateCount)
+            assertEquals(0, scheduler.pendingCommandCount)
+            scheduler.recover()
+            scheduler.submitCommand { log += "recovered" }
+            driver.tick()
+            assertEquals(listOf("first", "recovered"), log)
         }
-        assertEquals(listOf(0, 0, 1, 10, 2, 20, 3, 30), log)
-        assertEquals(0, scheduler.pendingStateCount)
-        assertEquals(0, scheduler.pendingCommandCount)
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver, maxOperations = 2)
+            val log = mutableListOf<Int>()
+            repeat(4) { round ->
+                scheduler.submitState("s") { log += round }
+                scheduler.submitCommand { log += round * 10 }
+                driver.tick()
+            }
+            assertEquals(listOf(0, 0, 1, 10, 2, 20, 3, 30), log)
+            assertEquals(0, scheduler.pendingStateCount)
+            assertEquals(0, scheduler.pendingCommandCount)
+        }
     }
 
     @Test fun equalButDistinctBindingsShareOneGroup() {
@@ -558,28 +565,29 @@ class SchedulerContractTest {
         assertTrue("cached group key table must be cleared", (field(groups, "groupKeys") as Array<*>).all { it == null })
     }
 
-    @Test fun groupTableBoundAllowsThirteenDistinctGroupsAtCapacityThirteen() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver, stateCapacity = 13, maxOperations = 13)
-        val log = mutableListOf<Int>()
-        repeat(13) { index ->
-            scheduler.submitState(StateSlot(DistinctBinding(index), 0)) { log += index }
+    @Test fun groupTableBoundAllowsDistinctAndHashCollidingGroupsAtCapacityThirteen() {
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver, stateCapacity = 13, maxOperations = 13)
+            val log = mutableListOf<Int>()
+            repeat(13) { index ->
+                scheduler.submitState(StateSlot(DistinctBinding(index), 0)) { log += index }
+            }
+            driver.tick()
+            assertEquals((0 until 13).toList(), log)
+            assertEquals(0, scheduler.pendingStateCount)
         }
-        driver.tick()
-        assertEquals((0 until 13).toList(), log)
-        assertEquals(0, scheduler.pendingStateCount)
-    }
-
-    @Test fun groupTableBoundAllowsHashCollidingGroupsAtCapacityThirteen() {
-        val driver = VirtualFrameDriver()
-        val scheduler = scheduler(driver, stateCapacity = 13, maxOperations = 13)
-        val log = mutableListOf<Int>()
-        repeat(13) { index ->
-            scheduler.submitState(StateSlot(CollidingBinding(index), 0)) { log += index }
+        run {
+            val driver = VirtualFrameDriver()
+            val scheduler = scheduler(driver, stateCapacity = 13, maxOperations = 13)
+            val log = mutableListOf<Int>()
+            repeat(13) { index ->
+                scheduler.submitState(StateSlot(CollidingBinding(index), 0)) { log += index }
+            }
+            driver.tick()
+            assertEquals((0 until 13).toList(), log)
+            assertEquals(0, scheduler.pendingStateCount)
         }
-        driver.tick()
-        assertEquals((0 until 13).toList(), log)
-        assertEquals(0, scheduler.pendingStateCount)
     }
 
     private class DistinctBinding(val id: Int) {
