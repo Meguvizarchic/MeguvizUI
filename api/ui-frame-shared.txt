@@ -1,0 +1,47 @@
+// JVM public descriptors. Kotlin source contracts require separate compilation.
+
+public final class io.github.jichuo1.meguviz.ui.frames.ChoreographerFrameSource implements io.github.jichuo1.meguviz.ui.frames.FrameSource {
+  public static final java.lang.String SOURCE;
+    descriptor: Ljava/lang/String;
+  public io.github.jichuo1.meguviz.ui.frames.ChoreographerFrameSource();
+    descriptor: ()V
+
+  public io.github.jichuo1.meguviz.ui.scheduler.FrameTicket requestFrame(kotlin.jvm.functions.Function1<? super io.github.jichuo1.meguviz.ui.scheduler.FrameBudget, kotlin.Unit>);
+    descriptor: (Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/scheduler/FrameTicket;
+}
+
+public final class io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver implements io.github.jichuo1.meguviz.ui.scheduler.UiFrameDriver,java.lang.AutoCloseable {
+  public static final int MAX_CLIENTS;
+    descriptor: I
+  public io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver(io.github.jichuo1.meguviz.ui.frames.FrameSource, java.lang.String);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/frames/FrameSource;Ljava/lang/String;)V
+
+  public io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver(io.github.jichuo1.meguviz.ui.frames.FrameSource, java.lang.String, int, kotlin.jvm.internal.DefaultConstructorMarker);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/frames/FrameSource;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+
+  public java.lang.String getOwner();
+    descriptor: ()Ljava/lang/String;
+
+  public final java.lang.String getLastFailure();
+    descriptor: ()Ljava/lang/String;
+
+  public final int getPendingCount();
+    descriptor: ()I
+
+  public io.github.jichuo1.meguviz.ui.scheduler.FrameTicket requestFrame(kotlin.jvm.functions.Function1<? super io.github.jichuo1.meguviz.ui.scheduler.FrameBudget, kotlin.Unit>);
+    descriptor: (Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/scheduler/FrameTicket;
+
+  public final java.lang.String takeFailure();
+    descriptor: ()Ljava/lang/String;
+
+  public void close();
+    descriptor: ()V
+
+  public static final void access$deliver(io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver, io.github.jichuo1.meguviz.ui.scheduler.FrameBudget);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/frames/SharedFrameDriver;Lio/github/jichuo1/meguviz/ui/scheduler/FrameBudget;)V
+}
+
+public interface io.github.jichuo1.meguviz.ui.frames.FrameSource {
+  public abstract io.github.jichuo1.meguviz.ui.scheduler.FrameTicket requestFrame(kotlin.jvm.functions.Function1<? super io.github.jichuo1.meguviz.ui.scheduler.FrameBudget, kotlin.Unit>);
+    descriptor: (Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/scheduler/FrameTicket;
+}

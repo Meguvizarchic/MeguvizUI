@@ -12,7 +12,7 @@ import subprocess
 import time
 import zipfile
 
-MODULES = ("plan", "recycler", "text", "layouts", "prewarm", "codegen", "codegen-api")
+MODULES = ("plan", "recycler", "text", "layouts", "prewarm", "codegen", "codegen-api", "frame-shared")
 
 
 def main() -> int:

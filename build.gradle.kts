@@ -31,6 +31,7 @@ val selectedBuildProfiles = selectedBuildProfileNames.joinToString(",")
 val selectedP2Profiles = listOf(
     "plan" to "enablePlan", "recycler" to "enableRecycler", "text" to "enableText",
     "layouts" to "enableLayouts", "prewarm" to "enablePrewarm", "codegen" to "enableCodegen",
+    "frame-shared" to "enableFrameShared",
 ).filter { (_, property) -> providers.gradleProperty("enableP2").orNull == "true" ||
     providers.gradleProperty(property).orNull == "true" }.map { it.first }
 
@@ -184,16 +185,17 @@ subprojects {
 
 tasks.register<Exec>("verifyP2") {
     group = "verification"
-    description = "Verifies all six opt-in P2 profiles on the host; device and performance evidence remain separate."
+    description = "Verifies all seven opt-in P2 profiles on the host; device and performance evidence remain separate."
     dependsOn(p2Start, "publishCandidate", p2Api, p2DeviceProtocol)
-    if (selectedP2Profiles.size == 6) {
+    if (selectedP2Profiles.size == 7) {
         dependsOn(p2PerformanceProtocol, ":samples:p2-benchmark:assembleBenchmark",
             ":samples:p2-benchmark:assembleBenchmarkAndroidTest", ":samples:p2-benchmark:lintBenchmark")
         dependsOn(p2MatrixProtocol, ":samples:p2-matrix:assembleDebug",
             ":samples:p2-matrix:assembleDebugAndroidTest", ":samples:p2-matrix:lintDebug")
     }
     for (name in selectedP2Profiles.filter { it != "codegen" }) {
-        dependsOn(":ui-$name:assembleRelease", ":ui-$name:testDebugUnitTest", ":ui-$name:lintDebug")
+        val module = if (name == "frame-shared") "ui-frame-shared" else "ui-$name"
+        dependsOn("$module:assembleRelease", "$module:testDebugUnitTest", "$module:lintDebug")
     }
     for (name in listOf("recycler", "text", "layouts", "prewarm")) if (name in selectedP2Profiles) {
         dependsOn(":ui-$name:assembleDebugAndroidTest")
@@ -307,7 +309,8 @@ tasks.register("publishCandidate") {
         dependsOn(":ui-$profile-bridge:publishReleasePublicationToCandidateRepository")
     }
     for (profile in selectedP2Profiles.filter { it != "codegen" }) {
-        dependsOn(":ui-$profile:publishReleasePublicationToCandidateRepository")
+        val module = if (profile == "frame-shared") "ui-frame-shared" else "ui-$profile"
+        dependsOn("$module:publishReleasePublicationToCandidateRepository")
     }
     if ("codegen" in selectedP2Profiles) {
         dependsOn(":ui-codegen:publishReleasePublicationToCandidateRepository",
