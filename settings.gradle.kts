@@ -37,6 +37,7 @@ if (p2Enabled("enableRecycler")) include(":ui-recycler")
 if (p2Enabled("enableText")) include(":ui-text")
 if (p2Enabled("enableLayouts")) include(":ui-layouts")
 if (p2Enabled("enablePrewarm")) include(":ui-prewarm")
+if (p2Enabled("enableFrameShared")) include(":ui-frame-shared")
 if (p2Enabled("enableCodegen")) {
     include(":ui-codegen-api", ":ui-codegen", ":samples:generated-consumer")
 }
