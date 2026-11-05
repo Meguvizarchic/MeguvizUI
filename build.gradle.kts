@@ -194,7 +194,7 @@ tasks.register<Exec>("verifyP2") {
             ":samples:p2-matrix:assembleDebugAndroidTest", ":samples:p2-matrix:lintDebug")
     }
     for (name in selectedP2Profiles.filter { it != "codegen" }) {
-        val module = if (name == "frame-shared") "ui-frame-shared" else "ui-$name"
+        val module = if (name == "frame-shared") ":ui-frame-shared" else ":ui-$name"
         dependsOn("$module:assembleRelease", "$module:testDebugUnitTest", "$module:lintDebug")
     }
     for (name in listOf("recycler", "text", "layouts", "prewarm")) if (name in selectedP2Profiles) {
@@ -312,7 +312,7 @@ tasks.register("publishCandidate") {
         dependsOn(":ui-$profile-bridge:publishReleasePublicationToCandidateRepository")
     }
     for (profile in selectedP2Profiles.filter { it != "codegen" }) {
-        val module = if (profile == "frame-shared") "ui-frame-shared" else "ui-$profile"
+        val module = if (profile == "frame-shared") ":ui-frame-shared" else ":ui-$profile"
         dependsOn("$module:publishReleasePublicationToCandidateRepository")
     }
     if ("codegen" in selectedP2Profiles) {
