@@ -33,6 +33,7 @@ class UiSession(
     private val themeDomain = EpochDomain()
     private val resourceDomain = EpochDomain()
     private var nextIdentity = 1L
+    private var releaseDepth = 0
     private val nodes = linkedMapOf<Long, Node>()
     private val parentKeys = IdentityHashMap<ViewGroup, MutableSet<ViewKey>>()
     private val views = IdentityHashMap<View, Long>()
@@ -226,13 +227,24 @@ class UiSession(
 
     fun release(ref: ViewRef<*>) {
         assertOwner(); check(ref.session === this)
+        // A subtree release recurses through every child; discardInvalid scans the whole pending
+        // queue, so only the outermost release runs it. Children are covered by that scan.
+        releaseDepth++
+        try {
+            releaseNode(ref)
+        } finally {
+            releaseDepth--
+        }
+    }
+
+    private fun releaseNode(ref: ViewRef<*>) {
         val node = nodes[ref.identity] ?: return
         val childIds = children.remove(node.view) ?: emptySet()
         val failures = mutableListOf<Throwable>()
-        childIds.forEach { id -> nodes[id]?.let { child -> try { release(ViewRef(this, id, child.key, child.component)) } catch (t: Throwable) { failures += t } } }
+        childIds.forEach { id -> nodes[id]?.let { child -> try { releaseNode(ViewRef(this, id, child.key, child.component)) } catch (t: Throwable) { failures += t } } }
         nodes.remove(ref.identity)
         node.binding.advance()
-        scheduler.discardInvalid()
+        if (releaseDepth == 1) scheduler.discardInvalid()
         try { runCleanup(node.cleanup) } catch (t: Throwable) { failures += t }
         views.remove(node.view)
         node.parent?.let { parent ->
