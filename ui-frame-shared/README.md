@@ -55,4 +55,4 @@ sessionA.close(); sessionB.close(); shared.close()
 
 `SharedFrameDriverTest` 覆盖：多 client 合流为一次 source 请求、旧票据不取消新请求、全部取消时撤销 source 请求、单 client 失败不阻断其他、`Error` 扇出后重抛、重入进入下一帧、回调内取消跳过该 client、回调内 `close()` 不抛 CME、source 失败记录诊断并快速失败、关闭丢弃待处理。
 
-本模块目前**不进入** `verifyP2`/`publishCandidate` 等聚合门禁，只由上述自身 task 验证；`gradle.lockfile` 已提交。
+本模块已进入 `verifyP2`/`publishCandidate` 的**主机聚合门禁**（`-PenableP2=true` 或 `-PenableFrameShared=true`）；设备、性能与独立消费者准入尚未覆盖，因此**不在** `verifyReleaseCandidate` 的 release 准入范围内。`gradle.lockfile` 已提交。

@@ -10,11 +10,10 @@ import time
 import xml.etree.ElementTree as ET
 
 from gates import parse_tests, source_hash, write
+from p2_api import MODULES as P2_API_MODULES
 
 MODULES = ("plan", "recycler", "text", "layouts", "prewarm", "frame-shared")
 PROFILES = set(MODULES) | {"codegen"}
-# Modules with a published JVM API baseline (codegen has two artifacts).
-P2_API_MODULES = ("plan", "recycler", "text", "layouts", "prewarm", "codegen", "codegen-api", "frame-shared")
 
 
 def main() -> int:
@@ -67,7 +66,7 @@ def main() -> int:
     api_receipt = root / "build/reports/p2-api/receipt.json"
     api = json.loads(api_receipt.read_text("utf-8")) if api_receipt.is_file() else {}
     if (api.get("status") != "passed" or api.get("started_epoch", 0) < started or
-            len(api.get("checks", [])) != len(P2_API_MODULES)):
+            {check.get("module") for check in api.get("checks", [])} != set(P2_API_MODULES)):
         errors.append("Missing, failing or stale published P2 JVM API baselines")
     artifacts = {}
     built = {}

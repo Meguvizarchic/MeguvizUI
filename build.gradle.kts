@@ -296,7 +296,10 @@ tasks.register<Exec>("verifyReleaseCandidate") {
     description = "Checks current source, artifact and profile bound receipts; does not claim skipped gates passed."
     commandLine(providers.gradleProperty("pythonExecutable").getOrElse("python"),
         "build-logic/verification/gates.py", "release", "--root", rootDir.absolutePath,
-        "--profiles", selectedBuildProfiles, "--p2-profiles", selectedP2Profiles.joinToString(","))
+        "--profiles", selectedBuildProfiles,
+        // Release admission covers only modules with device/performance/consumer evidence.
+        // frame-shared is host-aggregated but not release-admitted, so it is excluded here.
+        "--p2-profiles", selectedP2Profiles.filter { it != "frame-shared" }.joinToString(","))
     if (selectedP2Profiles.isNotEmpty()) dependsOn("verifyP2")
 }
 

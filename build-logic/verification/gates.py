@@ -398,6 +398,8 @@ def release(root: Path, profiles: set[str], p2_profiles: set[str] | None = None)
     if not profiles.issubset(required_profiles):
         errors.append("Invocation profiles are outside the declared release scope")
     requested_p2 = p2_profiles or set()
+    # Release admission: modules with device, performance and independent-consumer evidence.
+    # Host aggregation may cover more modules (e.g. frame-shared); those are not admitted here.
     allowed_p2 = {"plan", "codegen", "recycler", "text", "layouts", "prewarm"}
     state_p2 = state.get("selected_p2_profiles", [])
     declaration_p2 = declaration.get("selected_p2_profiles", [])
