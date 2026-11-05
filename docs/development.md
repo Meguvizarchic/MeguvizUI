@@ -33,7 +33,7 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 同日的第二轮把 `ChoreographerFrameDriver` 在 API 33+ 改为 `postVsyncCallback`，把 `preferredFrameTimeline.deadlineNanos` 复制进 `FrameBudget`（`estimated=false`），使 `UiScheduler` 的 deadline 检查在默认路径上生效；API ≤32 保持原路径。`estimated` 语义统一为“deadline 是否未知/仅估计”。该设备相关改动只验证了编译、lint 与 API 基线不变，真机行为需设备门禁。
 
-同日的第三轮把 `UiScheduler.drain` 改为按 `estimated` 门控的派生预算：`estimated=false` 时取 `min(maxFrameWorkNanos, deadline - started - 1ms)`（soft deadline），`estimated=true` 时只用固定预算；并收敛 `PropertyBinding.apply` 的 `SHARED_READ`/`ALWAYS_WRITE` 死缓存（不再做不被读取的 read-back/snapshot）。host 合同测试覆盖门控与派生值。
+同日的第三轮把 `UiScheduler.drain` 改为按 `estimated` 门控的派生预算：`estimated=false` 时取 `min(maxFrameWorkNanos, deadline - started - 1ms)`（soft deadline），`estimated=true` 时只用固定预算；`FrameBudget` 增加 fail-closed 校验（`estimated=false` 必须有 deadline），并要求上游 `FrameTick.deadlineNanos()` 与 `System.nanoTime()` 同基。`PropertyBinding.apply` 的死缓存收敛（`SHARED_READ`/`ALWAYS_WRITE` 不再做不被读取的 read-back/snapshot）依赖真实 View，未在 host 覆盖，需设备回归（`samples/standalone` 的 `shared_property_reads_external_write`、`switch_rejection_final_authority` 是现成入口）。
 
 对比时保存改前/改后的源码状态和原始输出，在同一 JDK、堆参数、热身/迭代数下多进程交错运行，观察尾延迟及分配，不只挑最快一轮。HotSpot 逃逸分析可能消除临时对象，主机测量不可外推 ART；后台负载也会影响 p95/p99。此探针不是 Android 性能门禁。
 
