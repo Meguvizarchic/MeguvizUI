@@ -4,7 +4,7 @@ packaging = "jar"
 sha256 = "5933e5955b9711a73baf7bc97f18a0c4b01f12a00c98fec05d574e9e1dd8779c"
 [candidates.meguviz-ref-core.files]
 "meguviz-ref-core-1.2.0.pom" = "ef464886f4ac8c2d52be0b85e2aec2fa6603d55ba95d641a97c01ff8cb3510e2"
-"meguviz-ref-core-1.2.0.module" = "b732a95d6c22de5f96ad77b2e41cf63e3b434461089704885499fe4e7a75f571"
+"meguviz-ref-core-1.2.0.module" = "231d54599a7b6b83c5c04dbedfd02413bdd999b2a240049b45f7982d72ea6c82"
 
 [candidates.meguviz-android-runtime]
 version = "1.2.0"
