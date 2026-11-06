@@ -44,6 +44,7 @@ __pycache__/
 /scripts/refresh_state.py
 /scripts/verify-consumers.py
 /docs/*
+!/docs/brand/
 !/docs/README.md
 !/docs/installation.md
 !/docs/development.md
