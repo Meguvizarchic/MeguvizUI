@@ -54,3 +54,10 @@ scenario = "48-row-page-first-switch"
 kind = "benefit"
 max_ratio = 0.50
 reason = "Prewarming is admitted only if it at least halves main-thread work in the first switch frame."
+
+[profiles.frame-shared]
+statistic = "paired-ratio"
+scenario = "32-session-shared-frame-dispatch"
+kind = "bounded-overhead"
+max_ratio = 1.25
+reason = "A shared frame driver replaces N platform callbacks with one fan-out, but its own bookkeeping can cost more than the callbacks it removes. It is admitted only if that overhead stays within the loosest existing bound; a ratio above it means the platform already coalesces enough and the module is not worth enabling."

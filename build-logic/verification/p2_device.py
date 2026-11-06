@@ -11,7 +11,7 @@ import time
 
 from gates import artifact_hashes, source_hash, write
 
-PROFILES = ["plan", "codegen", "recycler", "text", "layouts", "prewarm"]
+PROFILES = ["plan", "codegen", "recycler", "text", "layouts", "prewarm", "frame-shared"]
 CASES = (
     ("plan", "samples/plan-consumer/build/outputs/apk/debug/plan-consumer-debug.apk",
      "samples/plan-consumer/build/outputs/apk/androidTest/debug/plan-consumer-debug-androidTest.apk",
@@ -27,6 +27,8 @@ CASES = (
      "io.github.jichuo1.meguviz.ui.layouts.test/io.github.jichuo1.meguviz.ui.layouts.RowInstrumentation", 4),
     ("prewarm", None, "ui-prewarm/build/outputs/apk/androidTest/debug/ui-prewarm-debug-androidTest.apk",
      "io.github.jichuo1.meguviz.ui.prewarm.test/io.github.jichuo1.meguviz.ui.prewarm.PrewarmInstrumentation", 2),
+    ("frame-shared", None, "ui-frame-shared/build/outputs/apk/androidTest/debug/ui-frame-shared-debug-androidTest.apk",
+     "io.github.jichuo1.meguviz.ui.frames.test/io.github.jichuo1.meguviz.ui.frames.FrameSharedInstrumentation", 3),
 )
 
 
@@ -148,7 +150,11 @@ def main() -> int:
         missing_apis = sorted({27, 29, 37} - {api})
         remaining = [f"Single-device run; other required APIs: {missing_apis}",
                      "OEM, accessibility and the full P2 behavior matrix require separate evidence"]
-        receipt = {"schema_version": 1, "gate": "p2-device", "status": "blocked", "ready": False,
+        # This script is a per-device instrumentation sweep, not a release verdict: one device can
+        # never cover the required API set, so it reports "passed" only for what it actually ran and
+        # stays explicitly not-ready for admission. Release admission reads p2-matrix instead.
+        receipt = {"schema_version": 1, "gate": "p2-device", "status": "passed" if not errors else "blocked",
+                   "ready": False, "admission": False,
                    "source_sha256": fingerprint, "profiles": PROFILES, "device_api": api,
                    "device_identity": device_identity,
                    "test_count": sum(item["tests"] for item in checked), "checks": checked,
@@ -158,6 +164,7 @@ def main() -> int:
                    "report_sha256": {p.relative_to(root).as_posix(): digest(p) for p in reports}}
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as failure:
         receipt = {"schema_version": 1, "gate": "p2-device", "status": "blocked", "ready": False,
+                   "admission": False,
                    "source_sha256": fingerprint, "profiles": PROFILES, "test_count": 0,
                    "artifacts": artifacts, "outputs": outputs, "errors": [str(failure)],
                    "started_epoch": started, "finished_epoch": time.time(), "reports": [], "report_sha256": {}}

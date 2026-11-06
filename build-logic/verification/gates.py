@@ -15,6 +15,9 @@ import xml.etree.ElementTree as ET
 
 SOURCE_SUFFIXES = {".kt", ".kts", ".java", ".xml", ".toml", ".properties", ".pro", ".py", ".yml", ".yaml", ".lockfile"}
 EXCLUDE = {".git", ".gradle", "build", ".tools", ".integration-worktrees", "worktree", "research", "__pycache__"}
+# P2 modules admitted to release: each needs device, performance and independent-consumer evidence.
+# Kept module-level so the profile-set contract test can compare it with the other declarations.
+ALLOWED_P2 = frozenset({"plan", "codegen", "recycler", "text", "layouts", "prewarm", "frame-shared"})
 
 
 def source_hash(root: Path) -> str:
@@ -399,8 +402,6 @@ def release(root: Path, profiles: set[str], p2_profiles: set[str] | None = None)
         errors.append("Invocation profiles are outside the declared release scope")
     requested_p2 = p2_profiles or set()
     # Release admission: modules with device, performance and independent-consumer evidence.
-    # Host aggregation may cover more modules (e.g. frame-shared); those are not admitted here.
-    allowed_p2 = {"plan", "codegen", "recycler", "text", "layouts", "prewarm"}
     state_p2 = state.get("selected_p2_profiles", [])
     declaration_p2 = declaration.get("selected_p2_profiles", [])
     if (not isinstance(state_p2, list) or not isinstance(declaration_p2, list)
@@ -413,7 +414,7 @@ def release(root: Path, profiles: set[str], p2_profiles: set[str] | None = None)
             errors.append("Duplicate P2 profile declaration")
         if required_p2 != set(declaration_p2) or requested_p2 != required_p2:
             errors.append("P2 invocation, project state and integration declaration must match")
-        if not required_p2.issubset(allowed_p2):
+        if not required_p2.issubset(ALLOWED_P2):
             errors.append("Unknown P2 profile")
     receipts = {}
     for name in ("host", "device"):
@@ -442,7 +443,10 @@ def release(root: Path, profiles: set[str], p2_profiles: set[str] | None = None)
             needed = {"core"}
         errors += [f"{name}: {e}" for e in validate_receipt(receipt, digest, needed, artifacts, root)]
     if required_p2:
-        for name in ("p2-host", "p2-consumer", "p2-device", "p2-performance"):
+        # Device evidence is the behavior matrix, not the single-device instrumentation sweep:
+        # p2-matrix writes one receipt per API and a gate receipt only for a passing run, while
+        # p2-device is a per-device helper that never claims a release verdict on its own.
+        for name in ("p2-host", "p2-consumer", "p2-matrix", "p2-performance"):
             path = root / f"build/reports/gates/{name}.json"
             receipt = read(path) if path.is_file() else {}
             receipts[name] = receipt.get("status", "not_run")
@@ -452,6 +456,13 @@ def release(root: Path, profiles: set[str], p2_profiles: set[str] | None = None)
     value = {"schema_version": 1, "gate": "release", "status": "blocked" if errors else "passed",
              "ready": not errors, "execution_target": target, "source_sha256": digest,
              "profiles": sorted(required_profiles), "p2_profiles": sorted(required_p2),
+             # The declaration files are git-ignored local state, so they cannot be part of
+             # source_hash without making every receipt unreproducible from a clean checkout.
+             # Recording their admission scope here instead lets a receipt state the scope it was
+             # obtained under, which is what a later audit actually needs.
+             "admission_scope": {"execution_target": target,
+                                 "selected_profiles": sorted(required_profiles),
+                                 "selected_p2_profiles": sorted(required_p2)},
              "artifacts": artifacts, "gates": receipts, "errors": errors,
              "finished_epoch": time.time()}
     write(root / "build/reports/gates/release.json", value)

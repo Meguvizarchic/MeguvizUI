@@ -13,7 +13,7 @@ GROUP = "io.github.jichuo1.meguviz"
 VERSION = "1.0.0"
 ARTIFACTS = {
     "core": "aar", "widgets": "aar", "plan": "aar", "recycler": "aar", "text": "aar",
-    "layouts": "aar", "prewarm": "aar", "codegen-api": "jar", "codegen": "jar",
+    "layouts": "aar", "prewarm": "aar", "frame-shared": "aar", "codegen-api": "jar", "codegen": "jar",
 }
 
 

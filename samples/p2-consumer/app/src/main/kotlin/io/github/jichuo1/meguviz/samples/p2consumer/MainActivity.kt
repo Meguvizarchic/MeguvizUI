@@ -18,6 +18,8 @@ import io.github.jichuo1.meguviz.ui.codegen.GenerateUiFactory
 import io.github.jichuo1.meguviz.ui.extensions.ExtensionDescriptor
 import io.github.jichuo1.meguviz.ui.extensions.FactoryRegistration
 import io.github.jichuo1.meguviz.ui.extensions.RegistrySnapshot
+import io.github.jichuo1.meguviz.ui.frames.ChoreographerFrameSource
+import io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver
 import io.github.jichuo1.meguviz.ui.layouts.nativeRow
 import io.github.jichuo1.meguviz.ui.plan.MountedUiPlan
 import io.github.jichuo1.meguviz.ui.plan.PlanComponent
@@ -45,6 +47,9 @@ private class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
 class MainActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
     private lateinit var session: UiSession
+    private lateinit var sharedSession: UiSession
+    private lateinit var frameSource: ChoreographerFrameSource
+    private lateinit var sharedDriver: SharedFrameDriver
     private lateinit var mounted: MountedUiPlan
     private lateinit var recycler: RecyclerView
     private lateinit var adapter: UiListAdapter<Item, Holder>
@@ -62,7 +67,12 @@ class MainActivity : Activity() {
         window.decorView.systemUiVisibility = window.decorView.systemUiVisibility or
             View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         setContentView(root)
-        session = UiSession(CreationEnvironment(this))
+        // Two sessions share one frame driver: this is the only configuration where the optional
+        // module differs from the default per-session driver, and it is what the device matrix
+        // asserts on (the shared label below only appears once a shared frame is delivered).
+        frameSource = ChoreographerFrameSource()
+        sharedDriver = SharedFrameDriver(frameSource)
+        session = UiSession(CreationEnvironment(this), sharedDriver)
         val registry = RegistrySnapshot.install(listOf(
             GeneratedLabelUiGenerated.registration(),
             FactoryRegistration(ExtensionDescriptor("native-text", "1"), Framework.text, Framework.textFactory),
@@ -72,6 +82,15 @@ class MainActivity : Activity() {
                 linearParams(), registry.resolve(GeneratedLabelUiGenerated.type))
             PrecomputedTextBinding(session, label, executor, { throw IllegalStateException(it) }, enabled = true,
                 minimumLength = 4).submit(getString(R.string.generated_label))
+        }
+        val sharedRoot = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(sharedRoot)
+        sharedSession = UiSession(CreationEnvironment(this), sharedDriver)
+        LinearScope(sharedSession, sharedRoot).nativeRow(ViewKey("shared-header"), linearParams()) {
+            val sharedLabel: GeneratedLabelViewRef = view(ViewKey("shared-label"), GeneratedLabelUiGenerated.type,
+                linearParams(), registry.resolve(GeneratedLabelUiGenerated.type))
+            PrecomputedTextBinding(sharedSession, sharedLabel, executor, { throw IllegalStateException(it) },
+                enabled = true, minimumLength = 4).submit(getString(R.string.shared_frame_label))
         }
         val planRoot = FrameLayout(this)
         root.addView(planRoot)
@@ -99,7 +118,10 @@ class MainActivity : Activity() {
         recycler.adapter = null
         adapter.close()
         mounted.close()
+        // Sessions first, then the driver they share: the driver outlives every session.
+        sharedSession.close()
         session.close()
+        sharedDriver.close()
         executor.shutdownNow()
         super.onDestroy()
     }

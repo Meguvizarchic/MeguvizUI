@@ -24,6 +24,9 @@ import io.github.jichuo1.meguviz.ui.ViewKey
 import io.github.jichuo1.meguviz.ui.extensions.ExtensionDescriptor
 import io.github.jichuo1.meguviz.ui.extensions.FactoryRegistration
 import io.github.jichuo1.meguviz.ui.extensions.RegistrySnapshot
+import io.github.jichuo1.meguviz.ui.frames.ChoreographerFrameSource
+import io.github.jichuo1.meguviz.ui.frames.FrameSource
+import io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver
 import io.github.jichuo1.meguviz.ui.layouts.nativeRow
 import io.github.jichuo1.meguviz.ui.plan.PlanComponent
 import io.github.jichuo1.meguviz.ui.plan.PlanNode
@@ -35,6 +38,7 @@ import io.github.jichuo1.meguviz.ui.prewarm.PrewarmSubmission
 import io.github.jichuo1.meguviz.ui.prewarm.PrewarmWork
 import io.github.jichuo1.meguviz.ui.prewarm.UiPrewarmer
 import io.github.jichuo1.meguviz.ui.recycler.UiListAdapter
+import io.github.jichuo1.meguviz.ui.scheduler.ChoreographerFrameDriver
 import io.github.jichuo1.meguviz.ui.scheduler.FrameBudget
 import io.github.jichuo1.meguviz.ui.scheduler.FrameTicket
 import io.github.jichuo1.meguviz.ui.scheduler.UiFrameDriver
@@ -58,7 +62,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Same-input A/B timing for the six P2 profiles. A is the path an application would use
+ * Same-input A/B timing for the seven P2 profiles. A is the path an application would use
  * without the module; B uses the module. Groups alternate ABBA per iteration, warmup samples
  * are discarded, and every sample checks the produced native result before it is recorded.
  * Raw nanosecond samples leave the device as status code 2 bundles; no verdict is made here.
@@ -103,7 +107,7 @@ class P2PerformanceInstrumentation : Instrumentation() {
         waitForIdleSync()
         val experiments = try {
             check(warmup in 0..1000 && samples in 1..10000) { "Sample bounds exceeded" }
-            listOf(plan(), codegen(), recycler(), text(), layouts(), prewarm())
+            listOf(plan(), codegen(), recycler(), text(), layouts(), prewarm(), frameShared())
         } catch (error: Throwable) {
             runOnMainSync { host.finish() }
             finish(Activity.RESULT_CANCELED, Bundle().apply { putString("stream", error.stackTraceToString()) })
@@ -496,6 +500,65 @@ class P2PerformanceInstrumentation : Instrumentation() {
                         "discarded_over_budget" to if (discarded == null) 0L else 1L) else emptyMap())
                 }
             } finally { main { host.removeAllViews(); session.close() } }
+        }
+    }
+
+    // --- frame-shared: N independent platform callbacks against one shared fan-out ----------
+    /**
+     * A is what an application does without the module: one [ChoreographerFrameDriver] per
+     * session, so every session posts its own platform callback. B shares one
+     * [SharedFrameDriver], so the same N requests reach the platform once.
+     *
+     * The measured value is the main-thread cost of dispatching one frame to all N sessions, which
+     * is the only thing the module changes. The wait for vsync is excluded: it is identical in both
+     * groups and would otherwise dominate the ratio and hide the bookkeeping cost. The criterion is
+     * `bounded-overhead`, not `benefit`: the driver's own bookkeeping can cost more than the
+     * callbacks it removes, and a ratio above the bound is a valid "not worth enabling" result.
+     */
+    private fun frameShared(): Experiment {
+        val sessions = 32
+        return Experiment("frame-shared", "32-session-shared-frame-dispatch", "main_thread_frame_dispatch",
+            "one ChoreographerFrameDriver per session; N platform callbacks per frame",
+            "one SharedFrameDriver over one ChoreographerFrameSource; one platform callback per frame") { group ->
+            val delivered = CountDownLatch(sessions)
+            var shared: SharedFrameDriver? = null
+            var sourceRequests = 0L
+            // First and last callback entry inside the platform frame; the difference is the
+            // dispatch cost itself, with the vsync wait excluded.
+            var firstEntry = 0L
+            var lastEntry = 0L
+            fun mark() {
+                val now = System.nanoTime()
+                if (firstEntry == 0L) firstEntry = now
+                lastEntry = now
+                delivered.countDown()
+            }
+            try {
+                main {
+                    if (group == 'A') {
+                        repeat(sessions) { ChoreographerFrameDriver().requestFrame { mark() } }
+                    } else {
+                        val frameSource = ChoreographerFrameSource()
+                        val counting = object : FrameSource {
+                            override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
+                                sourceRequests++
+                                return frameSource.requestFrame(callback)
+                            }
+                        }
+                        val sharedDriver = SharedFrameDriver(counting)
+                        shared = sharedDriver
+                        repeat(sessions) { sharedDriver.requestFrame { mark() } }
+                    }
+                }
+                check(delivered.await(10, TimeUnit.SECONDS)) { "frame-shared did not deliver every session" }
+                val elapsed = lastEntry - firstEntry
+                check(elapsed > 0) { "frame-shared callbacks did not span a measurable interval" }
+                // B must coalesce to exactly one platform request; A posts one per session.
+                if (group == 'B') check(sourceRequests == 1L) { "shared driver issued $sourceRequests requests" }
+                Sample(elapsed, if (group == 'B') mapOf("source_requests" to sourceRequests) else emptyMap())
+            } finally {
+                main { shared?.close() }
+            }
         }
     }
 }

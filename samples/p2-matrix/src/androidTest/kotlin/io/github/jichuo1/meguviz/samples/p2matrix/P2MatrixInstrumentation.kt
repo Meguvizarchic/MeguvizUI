@@ -31,6 +31,9 @@ import io.github.jichuo1.meguviz.ui.ViewKey
 import io.github.jichuo1.meguviz.ui.extensions.ExtensionDescriptor
 import io.github.jichuo1.meguviz.ui.extensions.FactoryRegistration
 import io.github.jichuo1.meguviz.ui.extensions.RegistrySnapshot
+import io.github.jichuo1.meguviz.ui.frames.ChoreographerFrameSource
+import io.github.jichuo1.meguviz.ui.frames.FrameSource
+import io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver
 import io.github.jichuo1.meguviz.ui.layouts.nativeRow
 import io.github.jichuo1.meguviz.ui.plan.PlanComponent
 import io.github.jichuo1.meguviz.ui.plan.PlanNode
@@ -221,6 +224,7 @@ class P2MatrixInstrumentation : Instrumentation() {
             "prewarm_low_memory_trim_releases_staged_page" to ::prewarmLowMemory,
             "prewarm_rotation_resource_change_releases_staged_page" to ::prewarmResourceChange,
             "prewarm_home_detach_and_unfinished_page_fallback" to ::prewarmDetachAndFallback,
+            "frame_shared_two_sessions_one_platform_frame" to ::frameSharedTwoSessions,
         )
         only?.let { selected ->
             val body = checkNotNull(cases[selected]) { "Unknown case $selected" }
@@ -763,5 +767,47 @@ class P2MatrixInstrumentation : Instrumentation() {
                 .put("fallback_stop", "CANCELLED").put("warm_path", if (overBudget) "OVER_BUDGET then built on open" else "prewarmed page used")
                 .put("heap_before", heapBefore).put("heap_with_page", peak))
         } finally { close(warmed) }
+    }
+
+    /**
+     * Two sessions share one driver: both must drain in a single platform frame, and the shared
+     * source must be asked exactly once. This is the only claim the module makes, so it is asserted
+     * as an exact integer rather than a timing distribution.
+     */
+    private fun frameSharedTwoSessions() {
+        val counting = CountingFrameSource(ChoreographerFrameSource())
+        val driver = SharedFrameDriver(counting)
+        val sessions = mutableListOf<UiSession>()
+        try {
+            main {
+                repeat(2) { index ->
+                    val session = UiSession(CreationEnvironment(targetContext), driver)
+                    sessions += session
+                    session.scheduler.submitState("matrix-slot-$index") { }
+                }
+            }
+            check(counting.requests == 1) { "expected one platform request, got ${counting.requests}" }
+            waitFor("both sessions drained in one shared frame", 10_000) {
+                main { sessions.all { it.scheduler.pendingStateCount == 0 } }
+            }
+            check(counting.requests == 1) { "shared driver re-requested within one frame: ${counting.requests}" }
+            evidence("frame_shared_two_sessions_one_platform_frame",
+                JSONObject().put("sessions", sessions.size).put("source_requests", counting.requests))
+        } finally {
+            main {
+                sessions.forEach { it.close() }
+                driver.close()
+            }
+        }
+    }
+
+    /** Counts platform requests so the matrix can assert coalescing exactly. */
+    private class CountingFrameSource(private val delegate: FrameSource) : FrameSource {
+        var requests = 0
+            private set
+        override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
+            requests++
+            return delegate.requestFrame(callback)
+        }
     }
 }

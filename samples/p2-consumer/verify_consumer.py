@@ -109,7 +109,7 @@ def main() -> int:
         "status": "passed" if not errors and checks else "blocked",
         "ready": bool(checks) and not errors,
         "source_sha256": fingerprint,
-        "profiles": ["core", "plan", "recycler", "text", "layouts", "prewarm", "codegen"],
+        "profiles": ["core", "plan", "recycler", "text", "layouts", "prewarm", "frame-shared", "codegen"],
         "check_count": len(checks),
         "test_count": 0,
         "checks": checks,

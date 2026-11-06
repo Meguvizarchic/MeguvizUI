@@ -22,7 +22,8 @@ import zipfile
 
 GROUP = "io.github.jichuo1.meguviz"
 MODULES = ("meguviz-ui-core", "meguviz-ui-widgets", "meguviz-ui-ref-bridge", "meguviz-ui-plan", "meguviz-ui-recycler",
-           "meguviz-ui-text", "meguviz-ui-layouts", "meguviz-ui-prewarm", "meguviz-ui-codegen-api", "meguviz-ui-codegen")
+           "meguviz-ui-text", "meguviz-ui-layouts", "meguviz-ui-prewarm", "meguviz-ui-frame-shared", "meguviz-ui-codegen-api",
+           "meguviz-ui-codegen")
 REPOSITORIES = ("https://repo1.maven.org/maven2/", "https://dl.google.com/dl/android/maven2/")
 NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 SENSITIVE = [re.compile(p) for p in (rb"[A-Za-z]:[\\/]+(?:Users|MeguvizUI|Bilibili|Gradle)", rb"/c/Users/", rb"Administrator",

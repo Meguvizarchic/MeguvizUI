@@ -46,6 +46,7 @@
 | `ui-text` | `meguviz-ui-text` | 长文本预计算 |
 | `ui-layouts` | `meguviz-ui-layouts` | 受限原生横向行 |
 | `ui-prewarm` | `meguviz-ui-prewarm` | 可取消的有界主线程预热 |
+| `ui-frame-shared` | `meguviz-ui-frame-shared` | 可选的多会话共享帧驱动 |
 
 Lumen 与 Android 两个桥的上游尚未发布到 Maven Central，因此暂不在 Central 提供。
 

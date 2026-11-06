@@ -73,14 +73,20 @@ class GateContracts(unittest.TestCase):
         for dependency in ("com.highcapable.hikage:core:1.1.1", "io.github.jichuo1.meguviz:meguviz-ref-core:0.1.0-SNAPSHOT", "project :ui-testkit", "androidx.appcompat:appcompat:1.8.0"):
             self.assertEqual([dependency], core_dependency_errors([dependency]))
 
-    def test_api_and_ci_are_bound_but_generated_state_is_not(self):
+    def test_api_and_ci_are_bound_but_local_state_is_not(self):
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
             root = Path(directory)
             (root / "api").mkdir()
             (root / ".github/workflows").mkdir(parents=True)
             (root / "api/public-api.txt").write_text("one", encoding="utf-8")
             before = source_hash(root)
-            (root / "PROJECT_STATE.json").write_text('{"status":"running"}', encoding="utf-8")
+            # PROJECT_STATE.json and integration/profiles.json are git-ignored local state, so they
+            # cannot be part of the fingerprint: a clean checkout would hash "absent" and no receipt
+            # could ever be reproduced. Admission scope is instead re-checked on every release run.
+            (root / "PROJECT_STATE.json").write_text('{"selected_p2_profiles":["plan"]}', encoding="utf-8")
+            self.assertEqual(before, source_hash(root))
+            (root / "build").mkdir()
+            (root / "build/reports.json").write_text('{"generated":true}', encoding="utf-8")
             self.assertEqual(before, source_hash(root))
             (root / "api/public-api.txt").write_text("two", encoding="utf-8")
             self.assertNotEqual(before, source_hash(root))
@@ -233,6 +239,36 @@ class GateContracts(unittest.TestCase):
             result = json.loads((root / "build/reports/gates/release.json").read_text("utf-8"))
             self.assertIn("bridge-r8: required profile is missing", result["errors"])
 
+    def test_unknown_p2_profile_is_rejected(self):
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
+            root = Path(directory)
+            selected = ["plan", "not-a-module"]
+            state = {"execution_target": "full_replacement", "selected_profiles": ["core"], "selected_p2_profiles": selected}
+            declaration = {"execution_target": "full_replacement", "selected_profiles": ["core"],
+                           "selected_p2_profiles": selected, "profiles": {"core": {"enabled": True}}}
+            write(root / "PROJECT_STATE.json", state)
+            write(root / "integration/profiles.json", declaration)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(2, release(root, {"core"}, set(selected)))
+            result = json.loads((root / "build/reports/gates/release.json").read_text("utf-8"))
+            self.assertIn("Unknown P2 profile", result["errors"])
+
+    def test_frame_shared_is_admissible(self):
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
+            root = Path(directory)
+            selected = ["frame-shared"]
+            state = {"execution_target": "full_replacement", "selected_profiles": ["core"], "selected_p2_profiles": selected}
+            declaration = {"execution_target": "full_replacement", "selected_profiles": ["core"],
+                           "selected_p2_profiles": selected, "profiles": {"core": {"enabled": True}}}
+            write(root / "PROJECT_STATE.json", state)
+            write(root / "integration/profiles.json", declaration)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(2, release(root, {"core"}, set(selected)))
+            result = json.loads((root / "build/reports/gates/release.json").read_text("utf-8"))
+            # Admissible: no "Unknown P2 profile". It still blocks on missing evidence.
+            self.assertNotIn("Unknown P2 profile", result["errors"])
+            self.assertIn("p2-matrix: gate is not passed", result["errors"])
+
     def test_selected_p2_cannot_be_silently_omitted_or_pass_without_device_and_performance(self):
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
             root = Path(directory)
@@ -249,7 +285,8 @@ class GateContracts(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(2, release(root, {"core"}, set(selected)))
             result = json.loads((root / "build/reports/gates/release.json").read_text("utf-8"))
-            self.assertIn("p2-device: gate is not passed", result["errors"])
+            # Device evidence is the behavior matrix; a missing matrix must block admission.
+            self.assertIn("p2-matrix: gate is not passed", result["errors"])
             self.assertIn("p2-performance: gate is not passed", result["errors"])
 
     def test_released_ref_uses_resolved_hash_without_snapshot_mirror(self):

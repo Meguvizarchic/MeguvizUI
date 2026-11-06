@@ -34,6 +34,7 @@ dependencies {
     implementation(project(":ui-text"))
     implementation(project(":ui-layouts"))
     implementation(project(":ui-prewarm"))
+    implementation(project(":ui-frame-shared"))
     compileOnly(project(":ui-codegen-api"))
     ksp(project(":ui-codegen"))
 }

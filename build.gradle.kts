@@ -187,7 +187,10 @@ tasks.register<Exec>("verifyP2") {
     group = "verification"
     description = "Verifies all seven opt-in P2 profiles on the host; device and performance evidence remain separate."
     dependsOn(p2Start, "publishCandidate", p2Api, p2DeviceProtocol)
-    if (selectedP2Profiles.size == 7) {
+    // The benchmark and matrix samples are included only for the aggregate switch
+    // (settings.gradle.kts), so gate on that same property. A profile count would break the
+    // seven-individual-switch path, where the samples are absent but the count still matches.
+    if (providers.gradleProperty("enableP2").orNull == "true") {
         dependsOn(p2PerformanceProtocol, ":samples:p2-benchmark:assembleBenchmark",
             ":samples:p2-benchmark:assembleBenchmarkAndroidTest", ":samples:p2-benchmark:lintBenchmark")
         dependsOn(p2MatrixProtocol, ":samples:p2-matrix:assembleDebug",
@@ -297,9 +300,7 @@ tasks.register<Exec>("verifyReleaseCandidate") {
     commandLine(providers.gradleProperty("pythonExecutable").getOrElse("python"),
         "build-logic/verification/gates.py", "release", "--root", rootDir.absolutePath,
         "--profiles", selectedBuildProfiles,
-        // Release admission covers only modules with device/performance/consumer evidence.
-        // frame-shared is host-aggregated but not release-admitted, so it is excluded here.
-        "--p2-profiles", selectedP2Profiles.filter { it != "frame-shared" }.joinToString(","))
+        "--p2-profiles", selectedP2Profiles.joinToString(","))
     if (selectedP2Profiles.isNotEmpty()) dependsOn("verifyP2")
 }
 

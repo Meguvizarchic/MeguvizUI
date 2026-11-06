@@ -1,4 +1,4 @@
-"""Measure the six P2 profiles on one authorized device and write a fail-closed admission receipt.
+"""Measure the seven P2 profiles on one authorized device and write a fail-closed admission receipt.
 
 Each profile is admitted only by its pre-declared criterion in p2_performance_criteria.json,
 computed from raw same-input A/B samples. Missing, partial or throttled runs never pass.
@@ -20,14 +20,15 @@ import tomllib
 
 from gates import artifact_hashes, source_hash, write
 
-PROFILES = ("plan", "codegen", "recycler", "text", "layouts", "prewarm")
+PROFILES = ("plan", "codegen", "recycler", "text", "layouts", "prewarm", "frame-shared")
 APP_PACKAGE = "io.github.jichuo1.meguviz.samples.p2benchmark"
 TEST_PACKAGE = APP_PACKAGE + ".test"
 RUNNER = TEST_PACKAGE + "/" + APP_PACKAGE + ".P2PerformanceInstrumentation"
 APP_APK = "samples/p2-benchmark/build/outputs/apk/benchmark/p2-benchmark-benchmark.apk"
 TEST_APK = "samples/p2-benchmark/build/outputs/apk/androidTest/benchmark/p2-benchmark-benchmark-androidTest.apk"
 CRITERIA = Path(__file__).with_name("p2_performance_criteria.toml")
-ADMITTED_MODULES = ("ui-core", "ui-widgets", "ui-plan", "ui-recycler", "ui-text", "ui-layouts", "ui-prewarm", "ui-codegen")
+ADMITTED_MODULES = ("ui-core", "ui-widgets", "ui-plan", "ui-recycler", "ui-text", "ui-layouts", "ui-prewarm",
+                    "ui-codegen", "ui-frame-shared")
 
 
 def digest(path: Path) -> str:
@@ -181,7 +182,7 @@ def main() -> int:
 
     try:
         if criteria.get("schema_version") != 2 or set(criteria.get("profiles", {})) != set(PROFILES):
-            raise ValueError("Criteria file does not declare exactly the six P2 profiles")
+            raise ValueError("Criteria file does not declare exactly the seven P2 profiles")
         if args.samples < criteria["minimum_samples"]:
             raise ValueError("Requested samples are below the declared minimum")
         if not admitted_artifacts:

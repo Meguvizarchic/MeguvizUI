@@ -26,7 +26,11 @@ APP_APK = "samples/p2-matrix/build/outputs/apk/debug/p2-matrix-debug.apk"
 TEST_APK = "samples/p2-matrix/build/outputs/apk/androidTest/debug/p2-matrix-debug-androidTest.apk"
 CONSUMER_APK = "samples/p2-consumer/app/build/outputs/apk/release/app-release-unsigned.apk"
 CONSUMER_PACKAGE = "io.github.jichuo1.meguviz.samples.p2consumer"
-CONSUMER_TEXTS = ("Generated label from published artifacts", "Plan label", "Published RecyclerView adapter")
+CONSUMER_TEXTS = ("Generated label from published artifacts", "Plan label", "Published RecyclerView adapter",
+                  "Shared frame driver serves two sessions")
+# Profiles whose device evidence this matrix provides. Kept in step with p2_gates.PROFILES; the
+# matrix exercises every opt-in module, so a new module must add a case here as well.
+PROFILES = ("plan", "codegen", "recycler", "text", "layouts", "prewarm", "frame-shared")
 CASES = (
     "rotation_restores_model_scroll_focus_ids", "activity_recreate_restores_model_scroll_focus_ids",
     "accessibility_tree_labels_targets_heading_order", "keyboard_tab_and_dpad_traversal",
@@ -36,6 +40,7 @@ CASES = (
     "layouts_font_scale_rtl_geometry_targets_focus_baseline", "plan_rtl_font_scale_geometry_and_accessibility_order",
     "prewarm_low_memory_trim_releases_staged_page", "prewarm_rotation_resource_change_releases_staged_page",
     "prewarm_home_detach_and_unfinished_page_fallback",
+    "frame_shared_two_sessions_one_platform_frame",
 )
 MANUAL = ("TalkBack spoken output, earcons and gestures on every P2 surface (needs a human listener with TalkBack enabled)",
           "Switch Access / external keyboard on a physical keyboard, beyond injected key events")
@@ -324,11 +329,19 @@ def main() -> int:
                "source_sha256": fingerprint, "device": device, "test_count": sum(item["status"] == "passed" for item in checks),
                "check_count": len(checks), "failed": failed, "checks": checks, "manual_pending": list(MANUAL),
                "artifacts": artifacts, "outputs": outputs, "errors": errors,
+               # The behavior matrix covers every P2 profile: its instrumentation cases are the
+               # device evidence for all of them, so release admission reads this receipt.
+               "profiles": list(PROFILES),
                "started_epoch": started, "finished_epoch": time.time(),
                "reports": [p.relative_to(root).as_posix() for p in reports],
                "report_sha256": {p.relative_to(root).as_posix(): digest(p) for p in reports}}
     destination = args.destination or root / f"build/reports/device/p2-matrix/api{device.get('api', 'unknown')}.json"
     write(destination, receipt)
+    # The gate receipt must be rewritten on every run, passing or not: skipping the write on failure
+    # would leave a previous passing receipt in place, and validate_receipt cannot tell a flaky
+    # re-run from an unchanged one. Per-API receipts stay per-device.
+    if args.destination is None:
+        write(root / "build/reports/gates/p2-matrix.json", receipt)
     print(json.dumps({"status": receipt["status"], "device": {k: device.get(k) for k in ("api", "model", "emulator")},
                       "passed": receipt["test_count"], "checks": len(checks), "failed": failed, "errors": errors,
                       "receipt": str(destination)}, ensure_ascii=False))

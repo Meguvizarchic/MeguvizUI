@@ -27,6 +27,7 @@ dependencies {
     implementation(libs.text)
     implementation(libs.layouts)
     implementation(libs.prewarm)
+    implementation(libs.frameShared)
     compileOnly(libs.annotations)
     ksp(libs.processor)
 }
