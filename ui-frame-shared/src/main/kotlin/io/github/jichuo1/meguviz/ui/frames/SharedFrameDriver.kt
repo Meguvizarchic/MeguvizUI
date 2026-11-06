@@ -1,5 +1,6 @@
 package io.github.jichuo1.meguviz.ui.frames
 
+import android.os.Looper
 import io.github.jichuo1.meguviz.ui.scheduler.FrameBudget
 import io.github.jichuo1.meguviz.ui.scheduler.FrameTicket
 import io.github.jichuo1.meguviz.ui.scheduler.UiFrameDriver
@@ -8,7 +9,9 @@ import io.github.jichuo1.meguviz.ui.scheduler.UiFrameDriver
  * One platform frame source shared by several [SharedFrameDriver] clients.
  *
  * The source delivers at most one callback per requested frame on the owner thread.
- * [SharedFrameDriver] never calls a client synchronously from [requestFrame].
+ * [SharedFrameDriver] never calls a client synchronously from [requestFrame]. A source that
+ * violates either rule is rejected with an [IllegalStateException] instead of recursing or
+ * corrupting the fan-out.
  */
 interface FrameSource {
     /** Enqueues one frame opportunity; [callback] must not be invoked before this returns. */
@@ -20,85 +23,101 @@ interface FrameSource {
  * [FrameSource] request per frame.
  *
  * This module is never required by the core: a session keeps its own driver unless the caller
- * explicitly constructs a shared one. All methods must run on the owner thread.
+ * explicitly constructs a shared one. Every method asserts the main thread, matching
+ * [io.github.jichuo1.meguviz.ui.UiSession], which is main-thread-only.
  *
  * Semantics:
- * - At most one pending request per client; a second request while one is pending is rejected.
+ * - Every [requestFrame] call is an independent one-shot request with its own ticket. There is no
+ *   client identity, so two calls are two requests; use one request per client and keep its ticket.
  * - A ticket only cancels its own request; a stale ticket cannot cancel a later one.
  * - Fan-out uses a snapshot, so a client may request, cancel or close from inside a callback;
  *   such work is deferred to the next frame.
  * - A client throwing a non-`Error` does not stop the others. An `Error` is recorded, the other
  *   clients still run, and the first `Error` is rethrown after the fan-out and state recovery so
  *   the platform still sees it (matching the single-driver contract).
+ * - A source failure leaves already-accepted requests pending and is retried by the next
+ *   [requestFrame]; `lastFailure` records the cause. A driver that is never asked again keeps
+ *   those requests until [close], which is visible through [pendingCount].
  * - Only text is retained for diagnostics; no Throwable or client reference is kept.
  */
 class SharedFrameDriver(
     private val source: FrameSource,
     override val owner: String = "meguviz.ui.shared-frame",
+    private val ownerCheck: () -> Unit = ::assertMainThread,
 ) : UiFrameDriver, AutoCloseable {
     private class Pending(
         val callback: (FrameBudget) -> Unit,
-        val generation: Long,
         var cancelled: Boolean = false,
     )
 
-    /** Next-frame requests, keyed by client id. Swapped with [snapshot] each frame. */
+    /** Next-frame requests, keyed by request id. Swapped with [snapshot] each frame. */
     private var active = LinkedHashMap<Long, Pending>()
     /** Requests captured for the frame currently being delivered. */
     private var snapshot = LinkedHashMap<Long, Pending>()
-    private var nextClient = 0L
-    private var generation = 0L
+    private var nextRequest = 0L
     private var sourceTicket: FrameTicket? = null
     private var requested = false
+    /** True while [FrameSource.requestFrame] runs; a synchronous callback is a contract violation. */
+    private var requesting = false
+    /** True between a successful source request and its delivery; a second delivery is a violation. */
+    private var awaitingDelivery = false
     private var dispatching = false
     private var closed = false
-    /** Set when the source itself failed; further requests fail fast instead of silently queuing. */
-    private var faulted = false
 
-    /** Last callback failure as text; never holds the Throwable or the client. */
+    /** Last failure as text; never holds the Throwable or the client. */
     var lastFailure: String? = null
         private set
 
+    /**
+     * Requests waiting for the next frame. Requests already captured for the frame being delivered
+     * are in flight and are not counted, so this reads 0 during a fan-out.
+     */
     val pendingCount: Int get() = active.size
 
     override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
+        assertOwner()
         check(!closed) { "Shared frame driver closed" }
-        check(!faulted) { "Shared frame driver source failed; recreate the driver" }
-        val client = ++nextClient
-        val ticketGeneration = ++generation
         check(active.size < MAX_CLIENTS) { "Shared frame driver client capacity exceeded" }
-        active[client] = Pending(callback, ticketGeneration)
+        check(nextRequest != Long.MAX_VALUE) { "Shared frame driver request identities exhausted" }
+        val request = ++nextRequest
+        active[request] = Pending(callback)
         requestSourceIfNeeded()
         return FrameTicket {
-            val entry = active[client]
-            if (entry != null && entry.generation == ticketGeneration) {
-                active.remove(client)
-                if (active.isEmpty()) cancelSource()
-            } else {
-                // The request may already have been captured for the frame being delivered;
-                // mark it so the fan-out skips it without touching the next frame's map.
-                snapshot[client]?.let { if (it.generation == ticketGeneration) it.cancelled = true }
-            }
+            assertOwner()
+            if (active.remove(request) != null && active.isEmpty()) cancelSource()
+            // The request may already have been captured for the frame being delivered; mark it so
+            // the fan-out skips it without touching the next frame's map.
+            snapshot[request]?.let { it.cancelled = true }
         }
     }
 
     private fun requestSourceIfNeeded() {
         if (requested || dispatching || active.isEmpty() || closed) return
         requested = true
+        awaitingDelivery = true
+        requesting = true
         try {
             sourceTicket = source.requestFrame(::deliver)
         } catch (failure: Throwable) {
+            // Keep the accepted requests: the next requestFrame retries the source, and the other
+            // clients' requests must not be dropped silently.
             requested = false
+            awaitingDelivery = false
             sourceTicket = null
-            // Keep the pending requests: the caller can still recover by requesting again after
-            // the source is healthy, and other clients' requests must not be dropped silently.
-            faulted = true
             lastFailure = "${failure.javaClass.name}: ${failure.message}"
             throw failure
+        } finally {
+            requesting = false
         }
     }
 
     private fun deliver(budget: FrameBudget) {
+        // A synchronous callback would recurse through requestSourceIfNeeded; a second delivery for
+        // one request would swap a map that the outer fan-out is still iterating.
+        check(awaitingDelivery && !requesting) {
+            "FrameSource must deliver asynchronously and at most once per request"
+        }
+        awaitingDelivery = false
         requested = false
         sourceTicket = null
         if (closed) return
@@ -122,12 +141,13 @@ class SharedFrameDriver(
                     if (failure is Error && firstError == null) firstError = failure
                 }
             }
-            batch.clear()
         } finally {
+            // Clear on every path: a leftover entry here would be swapped back into `active` by the
+            // next fan-out and delivered a second time.
+            snapshot.clear()
             dispatching = false
             if (closed) {
                 active.clear()
-                snapshot.clear()
             } else {
                 try {
                     requestSourceIfNeeded()
@@ -140,8 +160,9 @@ class SharedFrameDriver(
         }
     }
 
-    /** Returns and clears the last recorded callback failure text. */
+    /** Returns and clears the last recorded failure text. */
     fun takeFailure(): String? {
+        assertOwner()
         val failure = lastFailure
         lastFailure = null
         return failure
@@ -149,12 +170,19 @@ class SharedFrameDriver(
 
     private fun cancelSource() {
         requested = false
+        awaitingDelivery = false
         val ticket = sourceTicket
         sourceTicket = null
-        try { ticket?.cancel() } catch (failure: Exception) { lastFailure = "${failure.javaClass.name}: ${failure.message}" }
+        try {
+            ticket?.cancel()
+        } catch (failure: Exception) {
+            // Never overwrite a client failure with a cancellation failure: the root cause matters.
+            if (lastFailure == null) lastFailure = "${failure.javaClass.name}: ${failure.message}"
+        }
     }
 
     override fun close() {
+        assertOwner()
         if (closed) return
         closed = true
         // While a fan-out is in progress `snapshot` is the map being iterated; clearing it would
@@ -167,8 +195,20 @@ class SharedFrameDriver(
         cancelSource()
     }
 
+    private fun assertOwner() {
+        ownerCheck()
+    }
+
+    // Both modifiers are required: a bare `const val` in a private companion still compiles to a
+    // public static field on the outer class, which would freeze it into the JVM API baseline.
     private companion object {
         /** Bounded so a leaked client cannot grow the fan-out without limit. */
-        const val MAX_CLIENTS = 256
+        private const val MAX_CLIENTS = 256
+
+        private fun assertMainThread() {
+            check(Looper.myLooper() === Looper.getMainLooper()) {
+                "Shared frame driver requires the main thread"
+            }
+        }
     }
 }

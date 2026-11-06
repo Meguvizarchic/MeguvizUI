@@ -6,7 +6,10 @@ plugins {
 android {
     namespace = "io.github.jichuo1.meguviz.ui.frames"
     compileSdk = 37
-    defaultConfig { minSdk = 27 }
+    defaultConfig {
+        minSdk = 27
+        testInstrumentationRunner = "io.github.jichuo1.meguviz.ui.frames.FrameSharedInstrumentation"
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

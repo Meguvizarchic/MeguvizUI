@@ -1,8 +1,6 @@
 // JVM public descriptors. Kotlin source contracts require separate compilation.
 
 public final class io.github.jichuo1.meguviz.ui.frames.ChoreographerFrameSource implements io.github.jichuo1.meguviz.ui.frames.FrameSource {
-  public static final java.lang.String SOURCE;
-    descriptor: Ljava/lang/String;
   public io.github.jichuo1.meguviz.ui.frames.ChoreographerFrameSource();
     descriptor: ()V
 
@@ -11,13 +9,11 @@ public final class io.github.jichuo1.meguviz.ui.frames.ChoreographerFrameSource 
 }
 
 public final class io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver implements io.github.jichuo1.meguviz.ui.scheduler.UiFrameDriver,java.lang.AutoCloseable {
-  public static final int MAX_CLIENTS;
-    descriptor: I
-  public io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver(io.github.jichuo1.meguviz.ui.frames.FrameSource, java.lang.String);
-    descriptor: (Lio/github/jichuo1/meguviz/ui/frames/FrameSource;Ljava/lang/String;)V
+  public io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver(io.github.jichuo1.meguviz.ui.frames.FrameSource, java.lang.String, kotlin.jvm.functions.Function0<kotlin.Unit>);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/frames/FrameSource;Ljava/lang/String;Lkotlin/jvm/functions/Function0;)V
 
-  public io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver(io.github.jichuo1.meguviz.ui.frames.FrameSource, java.lang.String, int, kotlin.jvm.internal.DefaultConstructorMarker);
-    descriptor: (Lio/github/jichuo1/meguviz/ui/frames/FrameSource;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+  public io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver(io.github.jichuo1.meguviz.ui.frames.FrameSource, java.lang.String, kotlin.jvm.functions.Function0, int, kotlin.jvm.internal.DefaultConstructorMarker);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/frames/FrameSource;Ljava/lang/String;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 
   public java.lang.String getOwner();
     descriptor: ()Ljava/lang/String;

@@ -33,7 +33,7 @@ class SharedFrameDriverTest {
 
     @Test fun coalescesManyClientsIntoOneSourceRequest() {
         val source = FakeSource()
-        val driver = SharedFrameDriver(source)
+        val driver = SharedFrameDriver(source, ownerCheck = {})
         val seen = mutableListOf<Int>()
         repeat(3) { index -> driver.requestFrame { seen += index } }
         assertEquals(1, source.requests)
@@ -46,7 +46,7 @@ class SharedFrameDriverTest {
 
     @Test fun staleTicketCannotCancelALaterRequest() {
         val source = FakeSource()
-        val driver = SharedFrameDriver(source)
+        val driver = SharedFrameDriver(source, ownerCheck = {})
         val seen = mutableListOf<String>()
         val stale = driver.requestFrame { seen += "first" }
         source.emit()
@@ -59,7 +59,7 @@ class SharedFrameDriverTest {
 
     @Test fun cancellingAllPendingCancelsTheSourceRequest() {
         val source = FakeSource()
-        val driver = SharedFrameDriver(source)
+        val driver = SharedFrameDriver(source, ownerCheck = {})
         val first = driver.requestFrame { fail("cancelled") }
         val second = driver.requestFrame { fail("cancelled") }
         first.cancel()
@@ -72,7 +72,7 @@ class SharedFrameDriverTest {
 
     @Test fun oneClientFailureDoesNotBlockTheOthers() {
         val source = FakeSource()
-        val driver = SharedFrameDriver(source)
+        val driver = SharedFrameDriver(source, ownerCheck = {})
         val seen = mutableListOf<String>()
         driver.requestFrame { error("boom") }
         driver.requestFrame { seen += "second" }
@@ -84,7 +84,7 @@ class SharedFrameDriverTest {
 
     @Test fun errorIsRethrownAfterFanOut() {
         val source = FakeSource()
-        val driver = SharedFrameDriver(source)
+        val driver = SharedFrameDriver(source, ownerCheck = {})
         val seen = mutableListOf<String>()
         driver.requestFrame { throw AssertionError("boom") }
         driver.requestFrame { seen += "second" }
@@ -96,7 +96,7 @@ class SharedFrameDriverTest {
 
     @Test fun reentrantRequestWaitsForTheNextFrame() {
         val source = FakeSource()
-        val driver = SharedFrameDriver(source)
+        val driver = SharedFrameDriver(source, ownerCheck = {})
         val seen = mutableListOf<String>()
         driver.requestFrame {
             seen += "outer"
@@ -111,7 +111,7 @@ class SharedFrameDriverTest {
 
     @Test fun cancelFromInsideCallbackSkipsThatClient() {
         val source = FakeSource()
-        val driver = SharedFrameDriver(source)
+        val driver = SharedFrameDriver(source, ownerCheck = {})
         val seen = mutableListOf<String>()
         var second: FrameTicket? = null
         driver.requestFrame {
@@ -125,7 +125,7 @@ class SharedFrameDriverTest {
 
     @Test fun closeDropsPendingWithoutDelivering() {
         val source = FakeSource()
-        val driver = SharedFrameDriver(source)
+        val driver = SharedFrameDriver(source, ownerCheck = {})
         driver.requestFrame { fail("delivered after close") }
         driver.close()
         assertEquals(0, driver.pendingCount)
@@ -135,7 +135,7 @@ class SharedFrameDriverTest {
 
     @Test fun closeFromInsideCallbackDoesNotThrowOrStarveTheIterator() {
         val source = FakeSource()
-        val driver = SharedFrameDriver(source)
+        val driver = SharedFrameDriver(source, ownerCheck = {})
         val seen = mutableListOf<String>()
         driver.requestFrame {
             seen += "first"
@@ -150,34 +150,121 @@ class SharedFrameDriverTest {
 
     @Test fun sourceFailureKeepsPendingRequestsAndRecordsDiagnostics() {
         var fail = false
-        var callback: ((FrameBudget) -> Unit)? = null
+        var pending: ((FrameBudget) -> Unit)? = null
         val flaky = object : FrameSource {
-            override fun requestFrame(cb: (FrameBudget) -> Unit): FrameTicket {
+            override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
                 if (fail) throw IllegalStateException("source broken")
-                callback = cb
-                return FrameTicket { callback = null }
+                pending = callback
+                return FrameTicket { pending = null }
             }
         }
-        val driver = SharedFrameDriver(flaky)
+        val driver = SharedFrameDriver(flaky, ownerCheck = {})
         // Reentrant request from inside the fan-out forces a second source request; that request
         // is the one that fails, and it must not silently drop the reentrant client.
         driver.requestFrame { driver.requestFrame { } }
         fail = true
-        val failure = runCatching { checkNotNull(callback).invoke(FrameBudget(0)) }.exceptionOrNull()
+        val failure = runCatching { checkNotNull(pending).invoke(FrameBudget(0)) }.exceptionOrNull()
         assertTrue("source failure must propagate: $failure", failure is IllegalStateException)
         assertNotNull(driver.lastFailure)
-        assertThrows(IllegalStateException::class.java) { driver.requestFrame { } }
+        // The accepted request survives the failure, so the next requestFrame retries the source
+        // instead of the driver becoming a permanent dead end.
+        assertEquals(1, driver.pendingCount)
     }
 
-    @Test fun sourceFailureFailsFastAndRecordsDiagnostics() {
-        val failing = object : FrameSource {
-            override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket =
-                throw IllegalStateException("source broken")
+    @Test fun sourceFailureIsRetriedByTheNextRequest() {
+        var fail = true
+        var pending: ((FrameBudget) -> Unit)? = null
+        val flaky = object : FrameSource {
+            override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
+                if (fail) throw IllegalStateException("source broken")
+                pending = callback
+                return FrameTicket { pending = null }
+            }
         }
-        val driver = SharedFrameDriver(failing)
+        val driver = SharedFrameDriver(flaky, ownerCheck = {})
         assertThrows(IllegalStateException::class.java) { driver.requestFrame { } }
         assertNotNull(driver.lastFailure)
-        // The driver is faulted: later requests fail fast rather than joining a dead source.
+        // The request accepted before the failure is still pending, not silently dropped.
+        assertEquals(1, driver.pendingCount)
+        fail = false
+        val seen = mutableListOf<String>()
+        driver.requestFrame { seen += "recovered" }
+        assertEquals(2, driver.pendingCount)
+        checkNotNull(pending).invoke(FrameBudget(0))
+        assertEquals(listOf("recovered"), seen)
+        assertEquals(0, driver.pendingCount)
+    }
+
+    @Test fun synchronousSourceIsRejectedInsteadOfRecursing() {
+        val synchronous = object : FrameSource {
+            override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
+                callback(FrameBudget(0))
+                return FrameTicket { }
+            }
+        }
+        val driver = SharedFrameDriver(synchronous, ownerCheck = {})
+        val failure = runCatching { driver.requestFrame { } }.exceptionOrNull()
+        assertTrue("synchronous delivery must be a contract failure: $failure", failure is IllegalStateException)
+        assertTrue(
+            "message must name the async contract: ${failure?.message}",
+            failure?.message?.contains("asynchronously") == true,
+        )
+    }
+
+    @Test fun secondDeliveryForOneRequestIsRejected() {
+        var pending: ((FrameBudget) -> Unit)? = null
+        val manual = object : FrameSource {
+            override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
+                pending = callback
+                return FrameTicket { pending = null }
+            }
+        }
+        val driver = SharedFrameDriver(manual, ownerCheck = {})
+        val seen = mutableListOf<String>()
+        driver.requestFrame { seen += "once" }
+        val deliver = checkNotNull(pending)
+        deliver(FrameBudget(0))
+        assertEquals(listOf("once"), seen)
+        // A source that delivers one request twice would swap a map the outer fan-out is iterating.
+        assertThrows(IllegalStateException::class.java) { deliver(FrameBudget(0)) }
+        assertEquals(listOf("once"), seen)
+    }
+
+    @Test fun capacityRejectsBeyondMaxClients() {
+        val source = FakeSource()
+        val driver = SharedFrameDriver(source, ownerCheck = {})
+        repeat(256) { driver.requestFrame { } }
+        assertEquals(256, driver.pendingCount)
+        assertEquals(1, source.requests)
         assertThrows(IllegalStateException::class.java) { driver.requestFrame { } }
+        assertEquals(256, driver.pendingCount)
+    }
+
+    @Test fun closeIsIdempotentAndCancelsTheSourceRequest() {
+        val source = FakeSource()
+        val driver = SharedFrameDriver(source, ownerCheck = {})
+        driver.requestFrame { fail("delivered after close") }
+        driver.close()
+        driver.close()
+        assertEquals(0, driver.pendingCount)
+        assertFalse(source.hasRequest())
+        assertEquals(1, source.cancels)
+    }
+
+    @Test fun cancellationFailureDoesNotOverwriteAClientFailure() {
+        var pending: ((FrameBudget) -> Unit)? = null
+        val source = object : FrameSource {
+            override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
+                pending = callback
+                return FrameTicket { throw IllegalStateException("cancel broken") }
+            }
+        }
+        val driver = SharedFrameDriver(source, ownerCheck = {})
+        driver.requestFrame { error("root cause") }
+        checkNotNull(pending).invoke(FrameBudget(0))
+        driver.close()
+        // The client's Error text is the root cause; a cancellation failure must not replace it.
+        assertTrue("root cause must survive: ${driver.lastFailure}",
+            driver.lastFailure?.contains("root cause") == true)
     }
 }
