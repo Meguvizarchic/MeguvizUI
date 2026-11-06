@@ -1,20 +1,39 @@
 <div align="center">
 
+<img src="docs/brand/MeguvizUI.svg" width="96" height="96" alt="MeguvizUI">
+
 # MeguvizUI
 
 **面向 Android 原生 View 的强类型 Kotlin UI 库**
 
 布局类型约束 · 属性所有权 · 状态与命令 · 会话生命周期
 
+<br>
+
+[![License](https://img.shields.io/badge/license-Apache--2.0-00AEEC?style=flat-square&labelColor=2d3a55)](LICENSE)
+[![Language](https://img.shields.io/badge/lang-Kotlin-DEA584?style=flat-square&labelColor=2d3a55)](https://github.com/Meguvizarchic/MeguvizUI)
+[![Issues](https://img.shields.io/github/issues/Meguvizarchic/MeguvizUI?style=flat-square&labelColor=2d3a55)](https://github.com/Meguvizarchic/MeguvizUI/issues)
 [![CI](https://github.com/jichuo1/MeguvizUI/actions/workflows/verify.yml/badge.svg)](https://github.com/jichuo1/MeguvizUI/actions/workflows/verify.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.jichuo1.meguviz/meguviz-ui-widgets)](https://central.sonatype.com/artifact/io.github.jichuo1.meguviz/meguviz-ui-widgets)
-![JVM 17](https://img.shields.io/badge/JVM-17-blue)
-![Android API 27+](https://img.shields.io/badge/Android-API%2027%2B-3DDC84)
-[![License](https://img.shields.io/badge/License-Apache--2.0-blue)](LICENSE)
 
-[快速开始](#quick-start) · [使用示例](#examples) · [关键行为](#behavior) · [文档](#documentation)
+[✨ 特性](#-特性) · [📦 模块](#-模块) · [🚀 快速开始](#-快速开始) · [💡 使用示例](#-使用示例) · [⚠️ 关键行为](#-关键行为) · [📚 文档](#-文档) · [📄 许可证](#-许可证)
 
 </div>
+
+---
+
+<details>
+<summary><b>目录</b></summary>
+
+- [✨ 特性](#-特性)
+- [📦 模块](#-模块)
+- [🚀 快速开始](#-快速开始)
+- [💡 使用示例](#-使用示例)
+- [⚠️ 关键行为](#-关键行为)
+- [📚 文档](#-文档)
+- [📄 许可证](#-许可证)
+
+</details>
 
 ---
 
