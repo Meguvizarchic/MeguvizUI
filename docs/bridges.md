@@ -16,9 +16,11 @@
 
 ## Ref 与 Android
 
-Ref 桥依赖 Maven Central 的 `io.github.jichuo1.meguviz:meguviz-ref-core:1.0.0`，无需导入本地 Ref 候选。Gradle 校验元数据和上游 pins 均固定真实制品的 SHA-256。
+Ref 桥依赖 `io.github.jichuo1.meguviz:meguviz-ref-core:1.2.0`，Android 桥依赖 `meguviz-android-runtime`/`meguviz-android-window` 1.2.0。三者都是正式版本号，从 Maven Central 解析；[upstream-candidates.toml](../gradle/upstream-candidates.toml) 与 Gradle 校验元数据固定的是各自本地 1.2.0 候选的 SHA-256。
 
-Android 桥仍针对真实编译过的 `0.1.0-SNAPSHOT` 候选。精确版本与 SHA-256 记录于 [upstream-candidates.toml](../gradle/upstream-candidates.toml)，这些候选不随本仓库分发，必须先取得与 pins 一致的 Maven 仓库：
+上游 1.2.0 发布到 Central 之前，这两个桥在默认仓库下无法解析；发布后必须确认 Central 字节与 pins 一致，不一致时重新审阅并更新 pins，不能直接放宽校验。
+
+`build/upstream-repo/` 镜像只用于 SNAPSHOT 形式的 pin（`settings.gradle.kts` 只把 `-SNAPSHOT` 版本交给它）。改用 SNAPSHOT 候选时，先取得与 pins 一致的 Maven 仓库再导入：
 
 ```sh
 python scripts/import-upstream-candidates.py --repository <android-maven-repository> --artifact meguviz-android-runtime --artifact meguviz-android-window

@@ -11,9 +11,10 @@ dependencyResolutionManagement {
     repositories {
         exclusiveContent {
             forRepository { maven { name = "PinnedMeguvizCandidates"; url = uri("build/upstream-repo") } }
+            // Only unreleased snapshot pins come from the imported mirror; released x.y.z pins
+            // (gradle/upstream-candidates.toml) resolve from Maven Central and are checked by hash.
             filter {
-                includeModule("io.github.jichuo1.meguviz", "meguviz-android-runtime")
-                includeModule("io.github.jichuo1.meguviz", "meguviz-android-window")
+                includeVersionByRegex("io[.]github[.]jichuo1[.]meguviz", "meguviz-android-(runtime|window)", ".*-SNAPSHOT")
             }
         }
         google()

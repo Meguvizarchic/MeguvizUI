@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 CONSUMER = Path(__file__).resolve().parent
 ROOT = CONSUMER.parents[1]
 GROUP = "io.github.jichuo1.meguviz"
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 ARTIFACTS = {
     "core": "aar", "widgets": "aar", "plan": "aar", "recycler": "aar", "text": "aar",
     "layouts": "aar", "prewarm": "aar", "frame-shared": "aar", "codegen-api": "jar", "codegen": "jar",

@@ -10,10 +10,10 @@ appcompat = "1.8.0"
 # The optional Lumen bridge is verified against this explicitly approved version.
 #noinspection GradleDependency,NewerVersionAvailable
 lumen = "1.5.5"
-meguviz-ref = "1.0.0"
+meguviz-ref = "1.2.0"
 # This candidate is explicitly approved and SHA-pinned in upstream-candidates.toml.
 #noinspection GradleDependency,NewerVersionAvailable
-meguviz-upstream = "0.1.0-SNAPSHOT"
+meguviz-upstream = "1.2.0"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
