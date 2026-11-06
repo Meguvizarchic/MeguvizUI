@@ -32,9 +32,6 @@ public final class io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver impleme
 
   public void close();
     descriptor: ()V
-
-  public static final void access$deliver(io.github.jichuo1.meguviz.ui.frames.SharedFrameDriver, io.github.jichuo1.meguviz.ui.scheduler.FrameBudget);
-    descriptor: (Lio/github/jichuo1/meguviz/ui/frames/SharedFrameDriver;Lio/github/jichuo1/meguviz/ui/scheduler/FrameBudget;)V
 }
 
 public interface io.github.jichuo1.meguviz.ui.frames.FrameSource {

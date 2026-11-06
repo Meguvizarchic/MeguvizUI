@@ -35,9 +35,14 @@ interface FrameSource {
  * - A client throwing a non-`Error` does not stop the others. An `Error` is recorded, the other
  *   clients still run, and the first `Error` is rethrown after the fan-out and state recovery so
  *   the platform still sees it (matching the single-driver contract).
- * - A source failure leaves already-accepted requests pending and is retried by the next
- *   [requestFrame]; `lastFailure` records the cause. A driver that is never asked again keeps
- *   those requests until [close], which is visible through [pendingCount].
+ * - A [requestFrame] that throws accepted nothing: its callback is never delivered and it holds
+ *   no capacity, so a caller may retry without accumulating duplicates. Requests accepted
+ *   earlier keep their tickets and stay pending.
+ * - A source failure while re-arming after a fan-out is not thrown into the platform frame
+ *   callback (a non-`Error` there would crash the owner thread). It is recorded in `lastFailure`,
+ *   the requests stay pending, and the next [requestFrame] retries the source. A driver that is
+ *   never asked again keeps those requests until [close], which is visible through [pendingCount].
+ *   An `Error` from the source is still rethrown.
  * - Only text is retained for diagnostics; no Throwable or client reference is kept.
  */
 class SharedFrameDriver(
@@ -74,6 +79,10 @@ class SharedFrameDriver(
      */
     val pendingCount: Int get() = active.size
 
+    // A lambda, not `::deliver`: a bound reference to a private function compiles to a synthetic
+    // class that calls a public static `access$deliver`, which would leak into the JVM API baseline.
+    private val onFrame: (FrameBudget) -> Unit = { budget -> deliver(budget) }
+
     override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket {
         assertOwner()
         check(!closed) { "Shared frame driver closed" }
@@ -81,7 +90,15 @@ class SharedFrameDriver(
         check(nextRequest != Long.MAX_VALUE) { "Shared frame driver request identities exhausted" }
         val request = ++nextRequest
         active[request] = Pending(callback)
-        requestSourceIfNeeded()
+        try {
+            requestSourceIfNeeded()
+        } catch (failure: Throwable) {
+            // The caller gets an exception and no ticket, so it cannot cancel this request: keep it
+            // and its callback would run later anyway, and every retry would add an uncancellable
+            // duplicate. Roll back only this request; earlier ones still hold their tickets.
+            active.remove(request)
+            throw failure
+        }
         return FrameTicket {
             assertOwner()
             if (active.remove(request) != null && active.isEmpty()) cancelSource()
@@ -97,7 +114,7 @@ class SharedFrameDriver(
         awaitingDelivery = true
         requesting = true
         try {
-            sourceTicket = source.requestFrame(::deliver)
+            sourceTicket = source.requestFrame(onFrame)
         } catch (failure: Throwable) {
             // Keep the accepted requests: the next requestFrame retries the source, and the other
             // clients' requests must not be dropped silently.
@@ -152,8 +169,13 @@ class SharedFrameDriver(
                 try {
                     requestSourceIfNeeded()
                 } catch (postFailure: Throwable) {
-                    if (firstError == null) throw postFailure
-                    firstError.addSuppressed(postFailure)
+                    // This runs inside the platform frame callback, where a non-Error would crash
+                    // the owner thread. requestSourceIfNeeded already recorded lastFailure and kept
+                    // the requests pending; the next requestFrame retries the source.
+                    if (postFailure is Error) {
+                        if (firstError == null) throw postFailure
+                        firstError.addSuppressed(postFailure)
+                    }
                 }
             }
             firstError?.let { throw it }

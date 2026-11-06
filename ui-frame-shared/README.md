@@ -37,7 +37,8 @@ sessionA.close(); sessionB.close(); shared.close()
 | 源契约 | `FrameSource` 必须异步投递且每次请求至多投递一次；违反时抛 `IllegalStateException`，不会递归或破坏扇出 |
 | 异常隔离 | 单个 client 抛非 `Error` 不阻断其他 client；`Error` 记录后仍跑完其余 client，再在扇出与状态恢复后重抛 |
 | 关闭 | 回调内 `close()` 不抛 `ConcurrentModificationException`：扇出在下一条前停止，映射在 `finally` 清理 |
-| source 失败 | 记录 `lastFailure`、保留已接受请求；下一次 `requestFrame` 重试 source，不会变成永久死端 |
+| source 失败（请求时） | 抛出异常的那次 `requestFrame` 什么都没接受：回调永不投递、不占容量，调用方可直接重试而不会累积重复请求；此前已接受、持有票据的请求保持待处理 |
+| source 失败（扇出后重挂） | 发生在平台帧回调内，非 `Error` 不再抛给平台（否则主线程崩溃）：记录 `lastFailure`、保留待处理请求，下一次 `requestFrame` 重试 source；`Error` 仍重抛 |
 | 诊断 | `lastFailure` 只保存文本（异常类名 + message），不持有 Throwable 或 client 引用；取消失败不会覆盖 client 的根因文本 |
 | 重入 | 回调内再次请求进入下一帧，不递归扇出 |
 | 关闭 | `close()` 丢弃全部待处理请求并取消底层请求；之后 `requestFrame` 抛错 |
@@ -57,7 +58,7 @@ sessionA.close(); sessionB.close(); shared.close()
 ./gradlew -PenableFrameShared=true :ui-frame-shared:testDebugUnitTest :ui-frame-shared:lintDebug --offline --no-daemon
 ```
 
-`SharedFrameDriverTest`（16 项）覆盖：多 client 合流为一次 source 请求、旧票据不取消新请求、全部取消时撤销 source 请求、单 client 失败不阻断其他、`Error` 扇出后重抛、重入进入下一帧、回调内取消跳过该 client、回调内 `close()` 不抛 CME、source 失败后保留请求并由下一次请求重试、同步 source 被拒绝而非递归、单请求二次投递被拒绝、容量上限、`close()` 幂等、取消失败不覆盖根因文本。
+`SharedFrameDriverTest`（19 项）覆盖：多 client 合流为一次 source 请求、旧票据不取消新请求、全部取消时撤销 source 请求、单 client 失败不阻断其他、`Error` 扇出后重抛、重入进入下一帧、回调内取消跳过该 client、回调内 `close()` 不抛 CME、扇出后重挂失败不抛给平台且保留请求并由下一次请求重试、重挂时的 `Error` 仍重抛、抛错的 `requestFrame` 回滚且重试不累积、回滚不影响此前已接受的请求、同步 source 被拒绝而非递归、单请求二次投递被拒绝、容量上限、`close()` 幂等、取消失败不覆盖根因文本。
 
 `FrameSharedInstrumentation`（3 项，设备）用真实 `Choreographer` 验证：两个 session 在一帧内共同排空且只产生一次平台请求、跨帧持续投递、关闭其中一个 session 不影响另一个。`p2-matrix` 另有一条 `frame_shared_two_sessions_one_platform_frame` 用例把合流次数断言为精确整数。
 
