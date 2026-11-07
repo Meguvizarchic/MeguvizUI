@@ -56,6 +56,12 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 行为由 `CrossThreadSubmissionTest`（16 例）锁定：owner 队列只在 owner 线程被触碰、handoff 有界、拒绝原因与同步入口一致（PAUSED/FAULTED/CLOSED/容量）、动作在 owner 线程执行、worker 线程提交不会在 worker 上跑动作、状态与命令共用一次派发、暂存工作并入当前帧、队列满时被接受的更新重试而非丢弃、无派发器时为 `CLOSED`、派发被拒时丢弃 handoff 并返回 `CLOSED`（调用方与队列状态一致）、非 ACTIVE 时 `mergeHandoff` 不入队、8 生产者 × 200 次同槽压测无丢失、异步计数与同步口径一致。
 
+2026-11-07 的再一轮处理对抗审查点名的第一热点：`PropertyBinding.close` 无条件调用 `discardInvalid()`，而 `UiSession.releaseNode` 的扫描又排在 `runCleanup` 之前，于是一次子树释放会扫描 B+1 次（B 为关闭的绑定数），每次 O(S+C)。现在 `UiSession` 用私有 `discardBatch` 计数把 `rebind`/`releaseNode` 的清理包成批次，逐绑定关闭跳过自己的扫描、由批次在 cleanup 之后统一扫描一次；`releaseNode` 的扫描也移到 `runCleanup` 之后——绑定关闭才是让其排队工作失效的原因，原来的顺序正是迫使每个 `PropertyBinding.close` 再扫一遍的根因。
+
+代价与限制：新增 1 个 mangled 内部方法 `discardForBindingClose$ui_core`（本仓基线此前没有 mangled internal，这里为一个显著的释放风暴收益付出最小 ABI 面）。批量抑制需要真实 View/Context，**只能设备验证**，本轮未测。
+
+同轮复核后**刻意未做**的一项：`discardInvalid` 命令循环里的 `queue.contains(entry)` 与 `queue.remove(entry)` 在 `ArrayDeque` 上都是线性，多命令同时失效时是 O(C²)（实测 `command-discard-stale,256` 的 p99 从 4.2µs 劣化到 46.7µs，分配与中位数不变）。没做的原因：那个 `contains` 同时是校验器重入（`close()`/`pause()`/嵌套 `discardInvalid`）期间的防护——去掉它会让队列已清空或被嵌套调用搬走的条目被重复计数，修它需要引入能跨嵌套调用可见的「仍在队列中」标记，风险高于收益。留待有设备与压测条件时再评估。
+
 为验证兄弟 runtime 的未发布改动，可把审查并核对 SHA-256 的候选 AAR 放入独立空目录，只提取 `classes.jar`，再运行：
 
 ```sh
@@ -104,10 +110,9 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 ### 下一轮候选（已分析，未实施）
 
-以下两项来自源码分析与对抗复核，**尚未实施**，因为都涉及失效/清理时机语义，需设备行为矩阵兜底；记录在此供下一轮评估。
+- **`discardInvalid` 命令循环的 `queue.contains` 是 O(n)**（`UiScheduler.kt`，`ArrayDeque` 线性查找）。已用探针新增场景实测：`command-discard-stale,256` 相对 `command-discard,256` 分配几乎不变（8,632 vs 8,544 B/轮），中位数持平，但 **p99 从 4.2µs 劣化到 46.7µs**——O(n²) 只体现在尾部。**未实施**：那个 `contains` 同时是校验器重入（`close()`/`pause()`/嵌套 `discardInvalid`）期间的防护——去掉它会让队列已清空或被嵌套调用搬走的条目被重复计数；修它需要引入能跨嵌套调用可见的「仍在队列中」标记，风险高于收益。留待有设备与压测条件时再评估。
 
-- **`PropertyBinding.close` 每次触发全量 `discardInvalid`**（`ui-core/.../ui/Properties.kt:114`）。`UiSession.releaseNode` 有 `releaseDepth` 抑制，但 `PropertyBinding.close` 自身无条件调用扫描，因此一次子树释放仍会执行 B+1 次全量扫描（B 为关闭的绑定数）。host 探针无法覆盖（`PropertyBinding` 依赖真实 View），故未实测。建议：在 `UiSession` 内引入批量抑制计数，rebind/子树 release 期间只扫描一次。
-- **`discardInvalid` 命令循环的 `queue.contains` 是 O(n)**（`UiScheduler.kt:417`、`:431`，`ArrayDeque` 线性查找）。已用探针新增场景实测：`command-discard-stale,256` 相对 `command-discard,256` 分配几乎不变（8,632 vs 8,544 B/轮），中位数持平，但 **p99 从 4.2µs 劣化到 46.7µs**——O(n²) 只体现在尾部。修改需要改动命令队列结构或引入标记清除，暂缓。
+已实施并从候选移除：`PropertyBinding.close` 的逐绑定全量扫描（见上，2026-11-07 第三轮）。
 
 对抗复核同时修正了上一轮分析报告的几处偏差，记录备查：`UiScheduler` 的「最大热点」结论基于 `80e6d28` 之前的源码，本轮优化后 `state-reentrant,256`（55,560 B）才是当前最大分配场景，稳态帧仅约 36 B；`indexStates` 的「抖动重分配」前提不成立（只在容量增长到新最大值时发生）；`PrecomputedTextBinding` 为 opt-in（默认关闭），不应计入默认路径。
 
