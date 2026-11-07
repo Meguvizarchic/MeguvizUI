@@ -1580,6 +1580,54 @@ public final class io.github.jichuo1.meguviz.ui.widgets.Sp {
     descriptor: (FF)Z
 }
 
+public final class io.github.jichuo1.meguviz.ui.widgets.UiScope implements java.lang.AutoCloseable {
+  public io.github.jichuo1.meguviz.ui.widgets.UiScope(io.github.jichuo1.meguviz.ui.UiSession, android.widget.FrameLayout);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/UiSession;Landroid/widget/FrameLayout;)V
+
+  public final io.github.jichuo1.meguviz.ui.UiSession getSession();
+    descriptor: ()Lio/github/jichuo1/meguviz/ui/UiSession;
+
+  public final android.widget.FrameLayout getRoot();
+    descriptor: ()Landroid/widget/FrameLayout;
+
+  public final io.github.jichuo1.meguviz.ui.widgets.FrameScope getScope();
+    descriptor: ()Lio/github/jichuo1/meguviz/ui/widgets/FrameScope;
+
+  public final boolean isClosed();
+    descriptor: ()Z
+
+  public void close();
+    descriptor: ()V
+}
+
+public final class io.github.jichuo1.meguviz.ui.widgets.UiScopeKt {
+  public static final io.github.jichuo1.meguviz.ui.widgets.UiScope openMeguvizUi(android.app.Activity);
+    descriptor: (Landroid/app/Activity;)Lio/github/jichuo1/meguviz/ui/widgets/UiScope;
+}
+
+public final class io.github.jichuo1.meguviz.ui.widgets.UiScopeKt$openMeguvizUi$4 implements android.app.Application$ActivityLifecycleCallbacks {
+  public void onActivityDestroyed(android.app.Activity);
+    descriptor: (Landroid/app/Activity;)V
+
+  public void onActivityCreated(android.app.Activity, android.os.Bundle);
+    descriptor: (Landroid/app/Activity;Landroid/os/Bundle;)V
+
+  public void onActivityStarted(android.app.Activity);
+    descriptor: (Landroid/app/Activity;)V
+
+  public void onActivityResumed(android.app.Activity);
+    descriptor: (Landroid/app/Activity;)V
+
+  public void onActivityPaused(android.app.Activity);
+    descriptor: (Landroid/app/Activity;)V
+
+  public void onActivityStopped(android.app.Activity);
+    descriptor: (Landroid/app/Activity;)V
+
+  public void onActivitySaveInstanceState(android.app.Activity, android.os.Bundle);
+    descriptor: (Landroid/app/Activity;Landroid/os/Bundle;)V
+}
+
 public final class io.github.jichuo1.meguviz.ui.widgets.WidgetsKt {
   public static final int getMatchParent();
     descriptor: ()I
