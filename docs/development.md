@@ -69,8 +69,8 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 | 项 | 做法 | 依据 | 风险 |
 | --- | --- | --- | --- |
-| 跨线程提交入口 | 提供不阻塞的投递 API：有界聚合 + 主线程帧内 drain，替代业务自行 `Handler.post` 造成的重复排帧 | React/Flutter/Compose 均以帧为合并窗口（已验证）；Android 17 无锁 MessageQueue 官方实测主线程锁竞争 −15%、掉帧 −4%（已验证） | 内存序与可见性；队列必须有界 |
-| 动画时钟 | `ChoreographerFrameDriver` 在 API 33+ 暴露 `FrameData.getAnimationTimeNanos()`，动画插值改用该时钟 | Android 官方 `FrameData` 文档：`frameTimeNanos` 用于动画会在迟到帧后跳变（已验证） | 需保留 API ≤32 回退 |
+| 跨线程提交入口 | 提供不阻塞的投递 API：有界聚合 + 主线程帧内 drain，替代业务自行 `Handler.post` 造成的重复排帧 | React/Flutter/Compose 均以帧为合并窗口（已验证）；Android 17 无锁 MessageQueue（DeliQueue）官方实测主线程锁竞争 −15%、app 掉帧 −4%、首帧 p95 −9.1%（已验证，[官方博客](https://developer.android.com/blog/posts/under-the-hood-android-17-lock-free-message-queue)） | 内存序与可见性；队列必须有界 |
+| 动画时钟 | `ChoreographerFrameDriver` 在 API 33+ 把 `getPreferredFrameTimeline().getExpectedPresentationTimeNanos()` 暴露给动画插值使用 | Android 官方 `FrameData` 文档明确：`frameTimeNanos` 用于动画会在迟到帧后跳变，应改用动画时钟（已验证）。注意 `FrameData.getAnimationTimeNanos()` 是 hidden API，不要引用；公开等价物是 `FrameTimeline.getExpectedPresentationTimeNanos()`（API 33） | 需保留 API ≤32 回退 |
 | 帧预算校准 | 用 `Display.getMode().getRefreshRate()` 与实测 tail 调整 `maxFrameWorkNanos` 与尾部预留 | Swappy 在慢会话把 jank 从 40% 降到 10%（已验证，游戏场景） | 预算过紧会把操作推到下一帧；需 Macrobenchmark |
 
 ### P1 高收益 / 中成本
@@ -83,7 +83,7 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 ### P2 待真机
 
-- ARR / `setFrameRate` 按场景降帧；着色器与 PSO 预编译消除首帧 20–80ms 编译尖峰；`targetSdk 37` 升级评估（无锁 MessageQueue、分代 GC，需排查反射私有字段与 `static final` 写入）。
+- ARR / `setFrameRate` 按场景降帧；着色器与 PSO 预编译消除首帧编译尖峰；`targetSdk 37` 升级评估（可获得的收益包括无锁 MessageQueue；需排查反射 `MessageQueue` 私有字段与修改 `static final` 字段，二者在 API 37 分别会失效与抛异常）。
 
 ### 明确不可依赖
 
