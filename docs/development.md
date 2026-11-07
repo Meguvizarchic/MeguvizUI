@@ -120,6 +120,35 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 已进行 API 37 范围的设备验证；API 27/29、完整无障碍、OEM 与性能矩阵仍有缺项。声明最低 SDK 不等于每个版本均已通过设备认证。工具链的可构建结果也不等于所有组合均处于 Kotlin 官方完整支持矩阵中。
 
+### 可选桥 profile 的本地验证
+
+`ui-android-bridge` / `ui-lumen-bridge` / `ui-ref-bridge` 由 `-PenableAndroid=true` / `-PenableLumen=true` / `-PenableRef=true` 引入，`verifyHost` 只在对应开关打开时验证它们。它们依赖家族 1.2.0 制品，而这三个版本**尚未发布到 Maven Central**，因此离线或常规联网解析都会失败——这是环境限制，不是代码失败。
+
+在装有 MeguvizAndroid 源码的机器上可以这样本地验证（不修改仓库文件）：
+
+```sh
+# 1) 把上游 1.2.0 制品发布到 mavenLocal（MeguvizAndroid 仓库内）
+./gradlew :android-runtime:publishReleasePublicationToMavenLocal \
+          :android-window:publishReleasePublicationToMavenLocal
+# 2) 把 ui-core 发布到 mavenLocal（本仓库内）
+./gradlew :ui-core:publishReleasePublicationToMavenLocal
+# 3) 用一个临时 init 脚本把 mavenLocal 注入 settings 级仓库并关闭依赖校验
+./gradlew :ui-android-bridge:testDebugUnitTest :ui-android-bridge:assembleRelease :ui-android-bridge:lintDebug \
+    -PenableAndroid=true --offline --dependency-verification=off -I <临时 init 脚本>
+```
+
+临时 init 脚本内容只有：
+
+```kotlin
+settingsEvaluated { dependencyResolutionManagement.repositories.mavenLocal() }
+```
+
+要点与限制：
+
+- 该方式验证的是「本机构建的上游 1.2.0 + 当前源码」，**不是** Central 上即将发布的字节；`gradle/verification-metadata.xml` 与 `upstream-candidates.toml` 的哈希校验必须以正式发布为准，所以这种运行要配合 `--dependency-verification=off`。
+- `ui-ref-bridge` 还需要 `meguviz-ref-core:1.2.0`，本机没有对应源码，仍无法验证。
+- MeguvizDrawable 的 `-Pmeguviz.profile=bridges` 需要 `meguviz-android-runtime` 与 `meguviz-ui-core` 的 1.2.0，可用同一 init 脚本与同两个发布步骤验证。
+
 ## 维护规则
 
 依赖版本固定在版本目录、锁文件和校验元数据中。常规构建不使用 `--write-locks` 或 `--write-verification-metadata`；更新依赖时应审查实际坐标、来源、许可证与哈希。API 变化需审查 `api/` 基线及正负编译案例，不应仅为消除失败自动更新基线。
