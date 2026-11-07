@@ -50,3 +50,10 @@ __pycache__/
 !/docs/contracts.md
 !/docs/bridges.md
 !/docs/p2.md
+!/docs/getting-started.md
+!/docs/examples.md
+!/docs/quickstart/
+!/docs/guides/
+!/docs/performance/
+!/docs/troubleshooting/
+!/docs/migration/
