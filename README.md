@@ -36,7 +36,7 @@
 | `ui-android-bridge` | `meguviz-ui-android-bridge` | 未发布 | 对接窗口生命周期、资源权威与同一帧驱动 |
 | `ui-testkit` | 不发布 | — | 合同测试支持 |
 
-可选 P2 模块均默认关闭，需显式启用，已随 1.0.0 发布到 Central，详见 [P2 使用说明](docs/p2.md)：
+可选 P2 模块均默认关闭，需显式启用，详见 [P2 使用说明](docs/p2.md)。除 `ui-frame-shared` 外均已随 1.0.0 发布到 Central；`ui-frame-shared` 只存在于当前源码候选（`v1.0.0` 标签不含该模块），消费 1.0.0 时不可用：
 
 | 模块 | Maven artifactId | 用途 |
 | --- | --- | --- |

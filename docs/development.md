@@ -9,7 +9,7 @@ Python 3.11+ 用于标准库验证脚本，JDK 17 与 Android SDK 配置见 [安
 ./gradlew publishCandidate --no-daemon --max-workers=2
 ```
 
-`verifyHost` 实际执行核心合同测试、Android lint、示例构建、发布 AAR 正负编译、JVM API 基线比较与核心依赖边界检查。可选桥开启时增加对应模块验证，Android 还需导入固定哈希的上游候选，Ref 1.0.0 直接从 Maven Central 解析。
+`verifyHost` 实际执行核心合同测试、Android lint、示例构建、发布 AAR 正负编译、JVM API 基线比较与核心依赖边界检查。可选桥开启时增加对应模块验证，Android 还需导入固定哈希的上游候选，Ref 1.2.0 直接从 Maven Central 解析。
 
 Windows 可用 `gradlew.bat`；遇到 JDK Unix-domain socket 临时目录问题时，可用 `scripts/gradle-local.ps1`，它仅对当前进程设置工程内临时目录。
 
@@ -54,7 +54,7 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 - 不同槽位的突发比同步路径多一倍 map 操作（handoff 插入 + 合并插入），这是分流暂存的固有成本；同槽位突发因为复用 `StateEntry` 而接近零分配（暂存命中时改为原地改写，`-coalesce` 场景因此从 6,360 B 降到 240 B）。
 - `state-full` / `state-partial` / `state-reentrant` 等既有场景数值与改动前一致，说明同步快路径没有回退。
 
-行为由 `CrossThreadSubmissionTest`（12 例）锁定：owner 队列只在 owner 线程被触碰、handoff 有界、拒绝原因与同步入口一致（PAUSED/FAULTED/CLOSED/容量）、动作在 owner 线程执行、worker 线程提交不会在 worker 上跑动作、状态与命令共用一次派发、暂存工作并入当前帧、队列满时被接受的更新重试而非丢弃、无派发器时为 `CLOSED`、派发被拒时工作保留待下次重试。
+行为由 `CrossThreadSubmissionTest`（16 例）锁定：owner 队列只在 owner 线程被触碰、handoff 有界、拒绝原因与同步入口一致（PAUSED/FAULTED/CLOSED/容量）、动作在 owner 线程执行、worker 线程提交不会在 worker 上跑动作、状态与命令共用一次派发、暂存工作并入当前帧、队列满时被接受的更新重试而非丢弃、无派发器时为 `CLOSED`、派发被拒时丢弃 handoff 并返回 `CLOSED`（调用方与队列状态一致）、非 ACTIVE 时 `mergeHandoff` 不入队、8 生产者 × 200 次同槽压测无丢失、异步计数与同步口径一致。
 
 为验证兄弟 runtime 的未发布改动，可把审查并核对 SHA-256 的候选 AAR 放入独立空目录，只提取 `classes.jar`，再运行：
 

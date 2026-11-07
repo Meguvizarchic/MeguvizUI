@@ -80,6 +80,24 @@ class UiScheduler(
     private val nanoTime: () -> Long = System::nanoTime,
     private val dispatcher: OwnerThreadDispatcher? = null,
 ) : AutoCloseable {
+
+    /**
+     * The pre-1.2 seven-argument constructor, kept so existing Java callers stay binary compatible.
+     *
+     * It behaves exactly like the primary constructor with a null [dispatcher], i.e. owner-thread
+     * only: the `submit*Async` entry points report [RejectionReason.CLOSED]. Source that used to
+     * compile against the seven-argument form keeps compiling and keeps linking.
+     */
+    constructor(
+        driver: UiFrameDriver,
+        assertOwner: () -> Unit,
+        stateCapacity: Int,
+        commandCapacity: Int,
+        maxOperationsPerFrame: Int,
+        maxFrameWorkNanos: Long,
+        nanoTime: () -> Long,
+    ) : this(driver, assertOwner, stateCapacity, commandCapacity, maxOperationsPerFrame, maxFrameWorkNanos, nanoTime, null)
+
     private class Batch(val operations: Array<ScheduledOperation?>) {
         var applied = 0
         var cursor = 0
@@ -239,8 +257,15 @@ class UiScheduler(
     private val handoffStates = linkedMapOf<Any, StateEntry>()
     private val handoffCommands = ArrayDeque<ScheduledOperation>()
 
-    /** Coalescing performed by producers; folded into [coalesced] on the owner at merge time. */
+    // Producer-side counters, guarded by `handoffLock` and folded into the owner-side counters on
+    // the owner thread. Keeping them separate is what lets the owner fast path stay lock-free while
+    // the plain Long counters are never written from two threads.
+    /** Coalescing performed by producers; folded into [coalesced]/[released] on the owner. */
     private var handoffCoalesced = 0L
+    /** Producer acceptances; folded into [accepted] on the owner. */
+    private var handoffAccepted = 0L
+    /** Producer-side rejections; folded into [rejected] on the owner. */
+    private var handoffRejected = 0L
     private val handoffDispatchPending = AtomicBoolean(false)
     private val handoffDrain = Runnable { mergeHandoff() }
     private var nextStateGroups = ArrayDeque<Any>(stateCapacity)
@@ -302,6 +327,7 @@ class UiScheduler(
         rejectionForState()?.let { return reject(it) }
         val result = enqueueState(slot, isValid, action)
             ?: return reject(RejectionReason.STATE_CAPACITY)
+        accepted++
         requestIfNeeded()
         return result
     }
@@ -310,6 +336,9 @@ class UiScheduler(
      * Queues one state entry on the owner thread. Returns null when the queue is full for this new
      * slot, in which case nothing was queued; otherwise the usual [SubmitResult.Accepted] /
      * [SubmitResult.Coalesced] verdict.
+     *
+     * Does not touch [accepted]: the synchronous caller counts its own submission, while the
+     * asynchronous merge is counted by the producer through [handoffAccepted].
      */
     private fun enqueueState(slot: Any, isValid: () -> Boolean, action: () -> Unit): SubmitResult? {
         // Coalescing fast path: the slot is already queued, so overwrite its entry in place. No
@@ -320,7 +349,6 @@ class UiScheduler(
             queued.action = action
             coalesced++
             released++
-            accepted++
             return SubmitResult.Coalesced
         }
         // A brand-new slot is the only case that can hit the bound; an overlapping slot already
@@ -328,7 +356,6 @@ class UiScheduler(
         if (pendingStateCount >= stateCapacity && frameStates?.containsKey(slot) != true) return null
         states[slot] = StateEntry(isValid, action)
         if (frameStates?.containsKey(slot) == true) overlappingStates++
-        accepted++
         return SubmitResult.Accepted
     }
 
@@ -386,10 +413,10 @@ class UiScheduler(
      * merge time stays staged and is retried on a later frame — it is never dropped.
      */
     fun submitStateAsync(slot: Any, isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
-        rejectionForState()?.let { return reject(it) }
-        val dispatcher = dispatcher ?: return reject(RejectionReason.CLOSED)
+        val dispatcher = dispatcher ?: return handoffReject(RejectionReason.CLOSED)
         var coalesced = false
         synchronized(handoffLock) {
+            rejectionForState()?.let { return handoffReject(it) }
             val existing = handoffStates[slot]
             if (existing != null) {
                 // Same in-place reuse as the owner fast path: a burst for one hot slot allocates
@@ -400,32 +427,49 @@ class UiScheduler(
                 coalesced = true
             } else {
                 if (handoffStates.size >= stateCapacity) {
-                    return reject(RejectionReason.STATE_CAPACITY)
+                    return handoffReject(RejectionReason.STATE_CAPACITY)
                 }
                 handoffStates[slot] = StateEntry(isValid, action)
             }
+            handoffAccepted++
         }
-        if (!scheduleHandoffDispatch(dispatcher)) return reject(RejectionReason.CLOSED)
+        if (!scheduleHandoffDispatch(dispatcher)) {
+            abandonHandoff()
+            return handoffReject(RejectionReason.CLOSED)
+        }
         return if (coalesced) SubmitResult.Coalesced else SubmitResult.Accepted
     }
 
     /** Non-blocking command submission from any thread; see [submitStateAsync]. */
     fun submitCommandAsync(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
-        rejectionForState()?.let { return reject(it) }
-        val dispatcher = dispatcher ?: return reject(RejectionReason.CLOSED)
+        val dispatcher = dispatcher ?: return handoffReject(RejectionReason.CLOSED)
         synchronized(handoffLock) {
+            rejectionForState()?.let { return handoffReject(it) }
             if (handoffCommands.size >= commandCapacity) {
-                return reject(RejectionReason.COMMAND_CAPACITY)
+                return handoffReject(RejectionReason.COMMAND_CAPACITY)
             }
             handoffCommands.addLast(ScheduledOperation("command", isValid, action))
+            handoffAccepted++
         }
-        return if (scheduleHandoffDispatch(dispatcher)) SubmitResult.Accepted
-        else reject(RejectionReason.CLOSED)
+        if (!scheduleHandoffDispatch(dispatcher)) {
+            abandonHandoff()
+            return handoffReject(RejectionReason.CLOSED)
+        }
+        return SubmitResult.Accepted
+    }
+
+    /**
+     * Counts a producer-side rejection under [handoffLock]. The owner-side [reject] counter is never
+     * written from a producer thread, so the two can never race.
+     */
+    private fun handoffReject(reason: RejectionReason): SubmitResult.Rejected {
+        handoffRejected++
+        return SubmitResult.Rejected(reason)
     }
 
     /**
      * Posts [handoffDrain] once for any number of pending updates. Returns false when the owner
-     * refused the dispatch; the staged work stays for a later call.
+     * refused the dispatch, leaving the handoff untouched for the caller to unwind.
      */
     private fun scheduleHandoffDispatch(dispatcher: OwnerThreadDispatcher): Boolean {
         if (!handoffDispatchPending.compareAndSet(false, true)) return true
@@ -435,16 +479,73 @@ class UiScheduler(
     }
 
     /**
+     * Producer side. Unwinds a refused dispatch: the submission that triggered it is voided (it
+     * must not count as accepted, matching the synchronous rejection path) and the handoff is
+     * dropped so the verdict and the queue state agree.
+     *
+     * Deliberately does not fold the producer counters into the owner-side ones: those are only
+     * ever written on the owner thread, so this teardown path loses its diagnostics rather than
+     * race. Callers hold no lock.
+     */
+    private fun abandonHandoff() {
+        synchronized(handoffLock) {
+            if (handoffAccepted > 0L) handoffAccepted--
+            handoffStates.clear()
+            handoffCommands.clear()
+            handoffCoalesced = 0L
+            handoffAccepted = 0L
+            handoffRejected = 0L
+            handoffDispatchPending.set(false)
+        }
+    }
+
+    /**
+     * Owner thread only. Discards everything staged and folds the producer counters in, exactly
+     * like the owner queues are cleared.
+     */
+    private fun dropHandoff() {
+        synchronized(handoffLock) {
+            released += handoffStates.size + handoffCommands.size + handoffCoalesced
+            accepted += handoffAccepted
+            rejected += handoffRejected
+            handoffStates.clear()
+            handoffCommands.clear()
+            handoffCoalesced = 0L
+            handoffAccepted = 0L
+            handoffRejected = 0L
+        }
+    }
+
+    /** Moves the producer-side counters into the owner-side ones. Caller holds [handoffLock]. */
+    private fun foldHandoffCounters() {
+        if (handoffAccepted > 0L) { accepted += handoffAccepted; handoffAccepted = 0L }
+        if (handoffRejected > 0L) { rejected += handoffRejected; handoffRejected = 0L }
+        if (handoffCoalesced > 0L) {
+            coalesced += handoffCoalesced
+            released += handoffCoalesced
+            handoffCoalesced = 0L
+        }
+    }
+
+    /**
      * Owner thread only. Merges the handoff into the owner queues using the same rules as
      * [submitState]/[submitCommand]. Updates that do not fit stay staged: a queue at capacity
      * always has work pending, so a frame is coming and a later merge will find room.
+     *
+     * While the scheduler is not ACTIVE the handoff is left untouched: [resume] and [recover] merge
+     * it, and [close] clears it. That keeps a paused/faulted/closed scheduler from accepting work
+     * the synchronous entry points would have rejected.
      */
     private fun mergeHandoff() {
         handoffDispatchPending.set(false)
         assertOwner()
         var mergedAny = false
         synchronized(handoffLock) {
-            if (handoffStates.isEmpty() && handoffCommands.isEmpty()) return
+            if (state != SchedulerState.ACTIVE) return
+            if (handoffStates.isEmpty() && handoffCommands.isEmpty()) {
+                foldHandoffCounters()
+                return
+            }
             val stagedStates = handoffStates.entries.toList()
             handoffStates.clear()
             val stagedCommands = handoffCommands.toList()
@@ -459,13 +560,8 @@ class UiScheduler(
                 }
                 commands.addLast(operation)
                 pendingCommands++
-                accepted++
             }
-            if (handoffCoalesced > 0L) {
-                coalesced += handoffCoalesced
-                released += handoffCoalesced
-                handoffCoalesced = 0L
-            }
+            foldHandoffCounters()
             mergedAny = true
         }
         if (mergedAny) requestIfNeeded()
@@ -524,6 +620,8 @@ class UiScheduler(
         assertOwner()
         check(state == SchedulerState.PAUSED) { "Only a paused scheduler can resume" }
         state = SchedulerState.ACTIVE
+        // Work staged before the pause was deliberately left queued; bring it in now.
+        mergeHandoff()
         requestIfNeeded()
     }
 
@@ -533,6 +631,7 @@ class UiScheduler(
         check(state == SchedulerState.FAULTED) { "Only a faulted scheduler can recover" }
         failure = null
         state = SchedulerState.ACTIVE
+        mergeHandoff()
     }
 
     /** Physically releases invalid pending work after rebind/release, without executing actions. */
@@ -927,13 +1026,7 @@ class UiScheduler(
 
     private fun clearQueues() {
         released += states.size + (frameStates?.size ?: 0) + pendingCommands
-        synchronized(handoffLock) {
-            released += handoffStates.size + handoffCommands.size + handoffCoalesced
-            handoffStates.clear()
-            handoffCommands.clear()
-            handoffCoalesced = 0L
-            handoffDispatchPending.set(false)
-        }
+        dropHandoff()
         states.clear()
         commands.forEach { if (it is Batch) it.clear() }
         commands.clear()

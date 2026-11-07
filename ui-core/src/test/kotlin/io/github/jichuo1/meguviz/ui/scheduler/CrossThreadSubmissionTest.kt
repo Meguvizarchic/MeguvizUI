@@ -191,16 +191,79 @@ class CrossThreadSubmissionTest {
         assertEquals(0, scheduler.pendingCommandCount)
     }
 
-    @Test fun refusedDispatchKeepsTheWorkStagedForALaterCall() {
+    @Test fun refusedDispatchDropsTheHandoffSoTheVerdictMatchesTheQueue() {
         val driver = VirtualFrameDriver()
         val dispatcher = RecordingDispatcher().also { it.refusals = 1 }
         val scheduler = scheduler(driver, dispatcher)
-        assertEquals(SubmitResult.Rejected(RejectionReason.CLOSED), scheduler.submitStateAsync("a") {})
+        assertEquals(SubmitResult.Rejected(RejectionReason.CLOSED), scheduler.submitStateAsync("a") { })
+        // The owner refused the dispatch: nothing may stay queued behind the rejection.
         assertEquals(0, dispatcher.posted.size)
-        // The item is still staged, so the next submission retries the dispatch.
-        assertEquals(SubmitResult.Accepted, scheduler.submitStateAsync("b") {})
-        assertEquals(1, dispatcher.posted.size)
+        assertEquals(0, scheduler.pendingStateCount)
+        // The abandonment path is producer-side: it clears the handoff without folding the
+        // producer counters, so the submission is neither accepted nor counted as rejected.
+        assertEquals(0L, scheduler.counters.acceptedSubmissions)
+        assertEquals(0L, scheduler.counters.rejectedSubmissions)
+    }
+
+    @Test fun aDispatchLandingWhilePausedDoesNotEnqueue() {
+        val driver = VirtualFrameDriver()
+        val dispatcher = RecordingDispatcher()
+        val scheduler = scheduler(driver, dispatcher)
+        scheduler.submitStateAsync("a") { }
+        // The dispatch has not run yet; pause before it lands. The handoff is deliberately kept
+        // (pause(clearPending = false)), so mergeHandoff is what must refuse to enqueue.
+        scheduler.pause(clearPending = false)
         dispatcher.drainAll()
-        assertEquals(2, scheduler.pendingStateCount)
+        assertEquals(0, scheduler.pendingStateCount)
+        assertEquals(SubmitResult.Rejected(RejectionReason.PAUSED), scheduler.submitStateAsync("b") { })
+    }
+
+    @Test fun pauseClearsTheHandoffLikeItClearsTheQueues() {
+        val driver = VirtualFrameDriver()
+        val dispatcher = RecordingDispatcher()
+        val scheduler = scheduler(driver, dispatcher)
+        scheduler.submitStateAsync("a") { }
+        scheduler.pause()
+        assertEquals(0, scheduler.pendingStateCount)
+        assertEquals(0, scheduler.pendingCommandCount)
+        assertEquals(SubmitResult.Rejected(RejectionReason.PAUSED), scheduler.submitStateAsync("b") { })
+    }
+
+    @Test fun manyProducersBurstingOneSlotLoseNothing() {
+        val driver = VirtualFrameDriver()
+        val dispatcher = RecordingDispatcher()
+        val scheduler = scheduler(driver, dispatcher, stateCapacity = 1024)
+        val threads = 8
+        val perThread = 200
+        val latch = CountDownLatch(threads)
+        repeat(threads) {
+            Thread {
+                repeat(perThread) { scheduler.submitStateAsync("shared") { } }
+                latch.countDown()
+            }.start()
+        }
+        assertTrue("producers did not finish", latch.await(10, TimeUnit.SECONDS))
+        assertEquals("one burst must cost one owner dispatch", 1, dispatcher.posted.size)
+        dispatcher.drainAll()
+        assertEquals(1, scheduler.pendingStateCount)
+        assertEquals((threads * perThread).toLong(), scheduler.counters.acceptedSubmissions)
+        assertEquals((threads * perThread - 1).toLong(), scheduler.counters.coalescedStates)
+        driver.tick()
+        assertEquals(1L, scheduler.counters.appliedOperations)
+    }
+
+    @Test fun asyncCountersMatchTheSynchronousOnes() {
+        val driver = VirtualFrameDriver()
+        val dispatcher = RecordingDispatcher()
+        val scheduler = scheduler(driver, dispatcher)
+        repeat(10) { scheduler.submitStateAsync("slot$it") { } }
+        repeat(10) { scheduler.submitStateAsync("slot0") { } }
+        dispatcher.drainAll()
+        driver.tick()
+        // 20 submissions accepted, 10 of them coalesced, 10 distinct slots applied.
+        assertEquals(20L, scheduler.counters.acceptedSubmissions)
+        assertEquals(10L, scheduler.counters.coalescedStates)
+        assertEquals(10L, scheduler.counters.appliedOperations)
+        assertEquals(0L, scheduler.counters.rejectedSubmissions)
     }
 }

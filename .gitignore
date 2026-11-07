@@ -6,6 +6,8 @@ local.properties
 .tools/
 .integration-worktrees/
 .kotlin/
+.mimosa/
+.zcode/
 __pycache__/
 *.py[cod]
 .env
@@ -52,6 +54,7 @@ __pycache__/
 !/docs/p2.md
 !/docs/getting-started.md
 !/docs/examples.md
+!/docs/api-semantics.md
 !/docs/quickstart/
 !/docs/guides/
 !/docs/performance/

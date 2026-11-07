@@ -43,7 +43,7 @@ PrecomputedTextBinding(session, ref, background, onFailure, enabled = false, min
 ```
 
 - 默认 `enabled = false`；只有显式启用且满足以下全部条件才走系统 `PrecomputedText`：API 28+、纯 `String`、长度 ≥ `minimumLength`、非 `EditText`、无 filters。
-- 不满足条件时 `submit` 返回 `false`，并改用普通 setter（命令语义）。
+- 不满足条件时 `submit` 返回 `false`，并改用普通 setter：纯 `String` 走 `Properties.plainText()` 的状态通道（可合并），其他 `CharSequence` 走命令通道（`PrecomputedTextBinding.kt:91-92`）。
 - 后台预计算结果通过主线程 `Handler` 投递；参数在提交后变化时最多重算两次，之后回退普通 setter。
 - 外部字体/主题原位变更时，调用方必须先调用 `invalidate()` 或相应资源权威失效方法。
 - 收益只针对主线程部分；后台计算使结果更晚可应用（具体延迟见准入记录）。
@@ -88,8 +88,11 @@ class UiScheduler(
     val maxOperationsPerFrame: Int = 64,
     val maxFrameWorkNanos: Long = 2_000_000,
     private val nanoTime: () -> Long = System::nanoTime,
+    private val dispatcher: OwnerThreadDispatcher? = null,
 )
 ```
+
+`dispatcher` 为可选参数，默认 `null`（纯 owner 线程独占）；另有一个只含前 7 个参数的次级构造器保留旧的签名，旧二进制调用方不受影响。详见[调度指南](../guides/scheduler.md#uischeduler-构造参数)。
 
 | 参数 | 默认值 | 计量单位 / 语义 |
 | --- | --- | --- |
@@ -151,11 +154,11 @@ data class FrameBudget(
 
 - `UiSession` / `UiScheduler` 的所有方法与帧回调都必须在 owner 线程执行；`UiSession.assertOwner()` 失败抛 `IllegalStateException("UI operation requires the main thread")`（`ui-core/.../UiSession.kt:59`）。
 - **唯一例外**：`UiSession.requestClose()` 可从后台线程调用，内部 post 到主线程执行 `close()`（`UiSession.kt:261-269`）。`close()` 本身仍要求主线程。
-- 以下入口全部要求主线程：`PropertyBinding.submit` / `operation`、`UiScheduler.submitState` / `submitStates` / `submitCommand` / `submitBatch` / `discardInvalid` / `pause` / `resume` / `recover` / `close`。
+- 以下入口全部要求主线程：`PropertyBinding.submit` / `operation`、`UiScheduler.submitState` / `submitStates` / `submitCommand` / `submitBatch` / `discardInvalid` / `pause` / `resume` / `recover` / `close`。跨线程请改用下面这两个异步入口。
+- 跨线程提交用 `submitStateAsync` / `submitCommandAsync`（`UiScheduler` 与 `UiSession` 都有）：后台线程只写入有界 handoff，一次 owner 派发服务整批更新，同槽更新在合并前就已塌缩成一条。详见[调度指南](../guides/scheduler.md#跨线程提交异步入口)。注意不同槽位的突发会比同步路径多一倍 map 操作（handoff 插入 + 合并插入），收益是 owner 派发次数，不是分配。
 - P2 模块的 `background: Executor` 必须真正异步：`LatestWork` / `LatestTextWork` 会检查后台线程是否为 owner 线程，若是则抛 `IllegalStateException("Background executor must run off the owner thread")`，并可能关闭控制器（`ui-recycler/.../LatestWork.kt:43-49`、`ui-text/.../LatestTextWork.kt:55-62`）。
 - owner 派发必须在主线程：`PrecomputedTextBinding` 与 `UiListAdapter` 内部用 `Handler(Looper.getMainLooper())` 投递结果。
 - `UiPrewarmer` 在 scheduler owner（主线程）执行，每帧最多一个单元；普通 `View` 构造不能放后台，后台只准备调用方自有的纯模型。
-- 当前没有内置的非阻塞跨线程提交 API；业务侧若需跨线程，应自行 post 到主线程后调用现有入口，不要引入冗余 API。
 
 ---
 

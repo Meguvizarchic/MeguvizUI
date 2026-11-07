@@ -51,8 +51,18 @@ class UiScheduler(
     val maxOperationsPerFrame: Int = 64,
     val maxFrameWorkNanos: Long = 2_000_000,
     private val nanoTime: () -> Long = System::nanoTime,
+    private val dispatcher: OwnerThreadDispatcher? = null,
 ) : AutoCloseable
+
+/** 与 MeguvizAndroid 的 OwnerDispatcher.post 同形，但重新声明在本模块内，不引入兄弟库依赖。 */
+fun interface OwnerThreadDispatcher {
+    fun post(callback: Runnable): Boolean
+}
 ```
+
+另有一个**只含前 7 个参数的次级构造器**，内部以 `dispatcher = null` 委托——它是 1.2.0 之前存在的签名，保留下来让旧的二进制调用方继续链接。
+
+`dispatcher` 为 `null` 时（默认）调度器保持纯 owner 线程独占，`submitStateAsync` / `submitCommandAsync` 一律返回 `Rejected(CLOSED)`；同步入口的行为与 1.2.0 之前完全一致。`UiSession` 会把主 `Handler` 装进去，因此用 `UiSession` 时异步入口默认可用。
 
 来源：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/UiScheduler.kt`。
 
@@ -217,7 +227,7 @@ data class SchedulerCounters(
 - `stateCapacity`/`commandCapacity` 是背压阈值，按页面最大并发属性/命令数留余量，不要直接设成无限。
 - `maxOperationsPerFrame` 控制单帧操作数上限；超出的操作留在队列进入下一帧。
 - `maxFrameWorkNanos` 是固定预算上限；API 33+ 的真实 deadline 会进一步收窄它。
-- 后台线程只计算脱离 View/Context 的结果，再通过宿主有界 mailbox 或 owner dispatcher 投递；后台直接调用 UI setter 或 `UiScheduler` 不受支持。
+- 后台线程只计算脱离 View/Context 的结果，不要直接调用 UI setter。跨线程提交请用[跨线程提交（异步入口）](#跨线程提交异步入口)里的 `submitStateAsync` / `submitCommandAsync`：后台线程只写入有界 handoff，一次 owner 派发服务整批更新。业务自行 `Handler.post` 再调同步入口会让 N 次更新产生 N 次主线程派发。
 
 ## 来源
 

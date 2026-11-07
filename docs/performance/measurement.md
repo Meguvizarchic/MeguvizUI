@@ -48,7 +48,7 @@
 
 ### 2.3 SchedulerProbeV2
 
-- 场景：`command-only`、`command-drain`、`state-full`、`state-drain`、`state-reentrant`、`state-partial`、`state-coalesce`、`state-batch`、`state-discard`、`command-discard`、`command-discard-stale`；size 取 16 / 64 / 256。
+- 场景：`command-only`、`command-drain`、`state-full`、`state-drain`、`state-reentrant`、`state-partial`、`state-coalesce`、`state-batch`、`state-discard`、`command-discard`、`command-discard-stale`、`state-async`、`state-async-coalesce`；size 取 16 / 64 / 256。
 - 计量前先运行语义检查：命令 FIFO 与合并、重入提交下一帧可见、分组轮转、故障恢复、`close()` 清空队列。
 - 分别计时「提交 + drain」与「仅 drain」；部分 drain 场景用 `size/2` 作为操作上限；`state-batch` 的 `StateUpdate` 构造成本计入测量，因此不与逐次 `submitState` 直接比较。
 - 默认 warmup 2000 / iterations 4000。
