@@ -9,6 +9,7 @@ import io.github.jichuo1.meguviz.ui.scheduler.ChoreographerFrameDriver
 import io.github.jichuo1.meguviz.ui.scheduler.UiFrameDriver
 import io.github.jichuo1.meguviz.ui.scheduler.UiScheduler
 import io.github.jichuo1.meguviz.ui.scheduler.SchedulerState
+import io.github.jichuo1.meguviz.ui.scheduler.SubmitResult
 import java.util.IdentityHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -52,7 +53,8 @@ class UiSession(
         val properties: MutableSet<String> = mutableSetOf(),
     )
     var state = SessionState.ACTIVE; private set
-    val scheduler = UiScheduler(driver, ::assertOwner)
+    /** The main handler doubles as the owner-thread dispatcher for the async submission entry points. */
+    val scheduler = UiScheduler(driver, ::assertOwner, dispatcher = { runnable -> handler.post(runnable) })
 
     init { assertOwner() }
 
@@ -267,6 +269,21 @@ class UiSession(
         }
         return closeReceipt
     }
+
+    /**
+     * Submits a state update from any thread without blocking. The update is staged and merged on
+     * the owner thread, where updates for the same slot posted in the meantime have already
+     * collapsed into one entry — so a background producer does not need its own `Handler.post` per
+     * update and does not cause extra frame requests.
+     *
+     * See [UiScheduler.submitStateAsync] for the rejection contract.
+     */
+    fun submitStateAsync(slot: Any, isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult =
+        scheduler.submitStateAsync(slot, isValid, action)
+
+    /** Non-blocking command submission from any thread; see [submitStateAsync]. */
+    fun submitCommandAsync(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult =
+        scheduler.submitCommandAsync(isValid, action)
 
     override fun close() {
         assertOwner()

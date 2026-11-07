@@ -39,6 +39,23 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 2026-11-07 的这一轮把状态队列的值由 `ScheduledOperation` 改为内部可变 `StateEntry`，同槽重提不再新建对象；新增 `submitStates(List<StateUpdate>)` 作为「同语义集合」入口（一次 owner 校验、一次帧请求、批内去重，逐条准入与重复调用 `submitState` 等价）；`discardInvalid` 改用键快照，且只有在真的删除了条目时才重建分组集合。同一探针上 `state-coalesce,256` 从约 6,296 B 降到 152 B，`state-discard,256` 从 54,795 B 降到 18,704 B，`state-full`/`state-partial`/`state-reentrant` 留在噪声内。`state-coalesce` 的改前值由 size=16/64 的实测（22.5 与 23.6 B 每次提交）结合 `state-batch` 相对 `state-full` 的差值推算——size=256 的直接对照会被 HotSpot 逃逸分析消除；`state-discard` 的改前值是直接实测。口径与完整数据表由会话留存。
 
+2026-11-07 的另一轮落地了跨线程提交入口。`UiScheduler` 增加可选的 `OwnerThreadDispatcher`（默认 `null`，保持纯 owner 线程独占，`submit*Async` 返回 `CLOSED`），并新增 `submitStateAsync` / `submitCommandAsync`：后台提交进入有界 handoff（上界 = `stateCapacity` / `commandCapacity`，按 slot 复用 `StateEntry`），**一次 owner 派发服务任意数量更新**；`drain()` 开头把暂存工作并入本帧（`mergeHandoff`），装不下的留在 handoff 等队列腾位后的下一次 merge，绝不丢弃。`UiSession` 用主 `Handler` 装配派发器，并暴露同名的 `submitStateAsync` / `submitCommandAsync` 简洁入口。同步快路径一行未改。
+
+`SchedulerProbeV2`（JDK 17，2000 热身 / 4000 迭代，中位数）每轮分配：
+
+| 场景 | 同步 | 异步 |
+| --- | --- | --- |
+| N=256 个不同槽位 | 16,457 B（`state-full,256`） | 34,968 B（`state-async,256`） |
+| N=256 次同一槽位 | 152 B（`state-coalesce,256`） | 240 B（`state-async-coalesce,256`） |
+
+口径说明：
+
+- 异步路径的收益是 **owner 派发次数**：N 次后台提交只产生 1 次 owner 派发 + 1 次合并；业务自行 `Handler.post` 是 N 次派发。单线程探针测不出派发成本，上表只反映分配。
+- 不同槽位的突发比同步路径多一倍 map 操作（handoff 插入 + 合并插入），这是分流暂存的固有成本；同槽位突发因为复用 `StateEntry` 而接近零分配（暂存命中时改为原地改写，`-coalesce` 场景因此从 6,360 B 降到 240 B）。
+- `state-full` / `state-partial` / `state-reentrant` 等既有场景数值与改动前一致，说明同步快路径没有回退。
+
+行为由 `CrossThreadSubmissionTest`（12 例）锁定：owner 队列只在 owner 线程被触碰、handoff 有界、拒绝原因与同步入口一致（PAUSED/FAULTED/CLOSED/容量）、动作在 owner 线程执行、worker 线程提交不会在 worker 上跑动作、状态与命令共用一次派发、暂存工作并入当前帧、队列满时被接受的更新重试而非丢弃、无派发器时为 `CLOSED`、派发被拒时工作保留待下次重试。
+
 为验证兄弟 runtime 的未发布改动，可把审查并核对 SHA-256 的候选 AAR 放入独立空目录，只提取 `classes.jar`，再运行：
 
 ```sh
@@ -69,7 +86,7 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 | 项 | 做法 | 依据 | 风险 |
 | --- | --- | --- | --- |
-| 跨线程提交入口 | 提供不阻塞的投递 API：有界聚合 + 主线程帧内 drain，替代业务自行 `Handler.post` 造成的重复排帧 | React/Flutter/Compose 均以帧为合并窗口（已验证）；Android 17 无锁 MessageQueue（DeliQueue）官方实测主线程锁竞争 −15%、app 掉帧 −4%、首帧 p95 −9.1%（已验证，[官方博客](https://developer.android.com/blog/posts/under-the-hood-android-17-lock-free-message-queue)） | 内存序与可见性；队列必须有界 |
+| ~~跨线程提交入口~~ **已落地 2026-11-07** | `UiSession.submitStateAsync` / `submitCommandAsync`：有界 handoff + 一次 owner 派发 + 帧内合并，替代业务自行 `Handler.post`。详见下方「2026-11-07（跨线程提交入口）」 | React/Flutter/Compose 均以帧为合并窗口（已验证）；Android 17 无锁 MessageQueue（DeliQueue）官方实测主线程锁竞争 −15%、app 掉帧 −4%、首帧 p95 −9.1%（已验证，[官方博客](https://developer.android.com/blog/posts/under-the-hood-android-17-lock-free-message-queue)） | 内存序与可见性；队列必须有界。已实现并由 `CrossThreadSubmissionTest` 锁定 |
 | 动画时钟 | `ChoreographerFrameDriver` 在 API 33+ 把 `getPreferredFrameTimeline().getExpectedPresentationTimeNanos()` 暴露给动画插值使用 | Android 官方 `FrameData` 文档明确：`frameTimeNanos` 用于动画会在迟到帧后跳变，应改用动画时钟（已验证）。注意 `FrameData.getAnimationTimeNanos()` 是 hidden API，不要引用；公开等价物是 `FrameTimeline.getExpectedPresentationTimeNanos()`（API 33） | 需保留 API ≤32 回退 |
 | 帧预算校准 | 用 `Display.getMode().getRefreshRate()` 与实测 tail 调整 `maxFrameWorkNanos` 与尾部预留 | Swappy 在慢会话把 jank 从 40% 降到 10%（已验证，游戏场景） | 预算过紧会把操作推到下一帧；需 Macrobenchmark |
 

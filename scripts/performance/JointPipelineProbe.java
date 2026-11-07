@@ -90,7 +90,7 @@ public final class JointPipelineProbe {
         FrameScheduler runtime = new FrameScheduler(clock, clock, clock.failures::add, 64);
         AndroidFrameDriver driver = new AndroidFrameDriver(clock, runtime, new Object());
         UiScheduler ui = new UiScheduler(driver, () -> { clock.checkOwner(); return Unit.INSTANCE; },
-                256, 256, 64, Long.MAX_VALUE, () -> 0L);
+                256, 256, 64, Long.MAX_VALUE, () -> 0L, null);
         FlightCache<String, Prepared> cache = FlightCache.<String, Prepared>builder(workers, clock::post).build();
         AtomicInteger preparations = new AtomicInteger();
         List<Prepared> ready = new ArrayList<>();

@@ -104,6 +104,30 @@ val result = session.scheduler.submitStates(listOf(
 
 `submitBatch` 的 vararg 重载与 `List` 版本契约相同，属于当前源码改动，**尚未发布**；已发布 1.0.0 使用 `listOf(...)` 形式。两种入口都会复制输入数组，调用方准入后修改 vararg 数组不会改变队列。
 
+### 跨线程提交（异步入口）
+
+后台线程不要自己 `Handler.post { submitState(...) }`：N 次更新就是 N 次主线程派发。用异步入口，N 次更新只产生 **1 次 owner 派发 + 1 次合并**。
+
+```kotlin
+fun submitStateAsync(slot: Any, isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult
+fun submitCommandAsync(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult
+```
+
+`UiSession` 上有一致的同名入口（`ui.submitStateAsync(...)`），内部用主 `Handler` 作派发器。
+
+语义：
+
+- **不阻塞**：后台线程只做一次加锁的 handoff 写入，立刻返回。
+- **有界**：handoff 上界就是 `stateCapacity` / `commandCapacity`；满时对新槽返回 `STATE_CAPACITY` / `COMMAND_CAPACITY`（与同步入口同一个 `RejectionReason`）。
+- **同槽合并**：handoff 阶段就按 slot 复用条目，所以同一热槽的 N 次后台提交在合并前已塌缩成一条。
+- **帧内合并**：`drain()` 开头把暂存工作并入本帧；装不下的留在 handoff，等队列腾出位置后的下一次 merge——**被接受的更新不会被丢弃**。
+- **拒绝语义与同步入口一致**：PAUSED / FAULTED / CLOSED 返回相同原因；未装配派发器时（`UiScheduler` 直接构造且 `dispatcher = null`）返回 `CLOSED`。
+- **动作始终在 owner 线程执行**：`isValid` 与 `action` 都不会在调用方线程跑。
+
+成本要清楚：不同槽位的突发比同步路径多一倍 map 操作（handoff 插入 + 合并插入）。host 探针实测（N=256）：不同槽位 16,457 → 34,968 B/轮；同一槽位 152 → 240 B/轮。**收益是 owner 派发次数，不是分配**——单线程探针测不出派发成本。
+
+派发器是可选构造参数，默认 `null`：不装配时 `UiScheduler` 保持纯 owner 线程独占，同步路径一行未变，`submit*Async` 一律返回 `CLOSED`。`UiSession` 总是装配主 `Handler`，所以用 `UiSession` 时异步入口默认可用。
+
 ### StateSlot 与公平轮转
 
 ```kotlin

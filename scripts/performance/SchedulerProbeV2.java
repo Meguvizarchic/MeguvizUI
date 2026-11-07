@@ -1,6 +1,7 @@
 import com.sun.management.ThreadMXBean;
 import io.github.jichuo1.meguviz.ui.scheduler.FrameBudget;
 import io.github.jichuo1.meguviz.ui.scheduler.FrameTicket;
+import io.github.jichuo1.meguviz.ui.scheduler.OwnerThreadDispatcher;
 import io.github.jichuo1.meguviz.ui.scheduler.RejectionReason;
 import io.github.jichuo1.meguviz.ui.scheduler.ScheduledOperation;
 import io.github.jichuo1.meguviz.ui.scheduler.StateSlot;
@@ -64,13 +65,26 @@ public final class SchedulerProbeV2 {
         final Driver driver = new Driver();
         final UiScheduler scheduler;
         final Object[] slots;
+        /** Records owner dispatches so a scenario can run exactly the merged work. */
+        final java.util.concurrent.ConcurrentLinkedQueue<Runnable> dispatches =
+                new java.util.concurrent.ConcurrentLinkedQueue<>();
+        final OwnerThreadDispatcher dispatcher = runnable -> {
+            dispatches.add(runnable);
+            return true;
+        };
 
         Fixture(int size, int maxOperations) {
-            scheduler = new UiScheduler(driver, NOOP, size, size, maxOperations, Long.MAX_VALUE, () -> 0L);
+            scheduler = new UiScheduler(driver, NOOP, size, size, maxOperations, Long.MAX_VALUE, () -> 0L,
+                    dispatcher);
             slots = new Object[size];
             for (int index = 0; index < size; index++) {
                 slots[index] = new StateSlot(index, index % 4);
             }
+        }
+
+        void drainDispatches() {
+            Runnable next;
+            while ((next = dispatches.poll()) != null) next.run();
         }
     }
 
@@ -86,7 +100,7 @@ public final class SchedulerProbeV2 {
         for (String scenario : new String[]{
                 "command-only", "command-drain", "state-full", "state-drain", "state-reentrant",
                 "state-partial", "state-coalesce", "state-batch", "state-discard",
-                "command-discard", "command-discard-stale"
+                "command-discard", "command-discard-stale", "state-async", "state-async-coalesce"
         }) {
             for (int size : new int[]{16, 64, 256}) {
                 measure(scenario, size, warmup, iterations, allocation);
@@ -213,6 +227,18 @@ public final class SchedulerProbeV2 {
                 }
                 scheduler.discardInvalid();
                 return;
+            case "state-async":
+                // A background burst of N distinct slots: one owner dispatch, then one merge.
+                for (Object slot : fixture.slots) scheduler.submitStateAsync(slot, VALID, ACTION);
+                fixture.drainDispatches();
+                return;
+            case "state-async-coalesce":
+                // N posts for one hot slot collapse in the handoff before the merge.
+                for (int index = 0; index < fixture.slots.length; index++) {
+                    scheduler.submitStateAsync(fixture.slots[0], VALID, ACTION);
+                }
+                fixture.drainDispatches();
+                return;
             default:
                 throw new AssertionError(scenario);
         }
@@ -229,7 +255,7 @@ public final class SchedulerProbeV2 {
 
     private static void verifyCommandFifoAndCoalescing() {
         Driver driver = new Driver();
-        UiScheduler scheduler = new UiScheduler(driver, NOOP, 8, 8, 32, Long.MAX_VALUE, () -> 0L);
+        UiScheduler scheduler = new UiScheduler(driver, NOOP, 8, 8, 32, Long.MAX_VALUE, () -> 0L, null);
         List<Integer> log = new ArrayList<>();
         for (int index = 0; index < 8; index++) {
             final int value = index;
@@ -260,7 +286,7 @@ public final class SchedulerProbeV2 {
 
     private static void verifyReentrantStateWaitsForNextFrame() {
         Driver driver = new Driver();
-        UiScheduler scheduler = new UiScheduler(driver, NOOP, 8, 8, 8, Long.MAX_VALUE, () -> 0L);
+        UiScheduler scheduler = new UiScheduler(driver, NOOP, 8, 8, 8, Long.MAX_VALUE, () -> 0L, null);
         List<String> log = new ArrayList<>();
         scheduler.submitState("outer", VALID, () -> {
             log.add("outer");
@@ -291,7 +317,7 @@ public final class SchedulerProbeV2 {
 
     private static void verifyGroupRoundRobinAfterPartialDrain() {
         Driver driver = new Driver();
-        UiScheduler scheduler = new UiScheduler(driver, NOOP, 16, 16, 4, Long.MAX_VALUE, () -> 0L);
+        UiScheduler scheduler = new UiScheduler(driver, NOOP, 16, 16, 4, Long.MAX_VALUE, () -> 0L, null);
         List<String> log = new ArrayList<>();
         for (int group = 0; group < 4; group++) {
             for (int property = 0; property < 4; property++) {
@@ -317,7 +343,7 @@ public final class SchedulerProbeV2 {
 
     private static void verifyFaultRecoversWithoutLeak() {
         Driver driver = new Driver();
-        UiScheduler scheduler = new UiScheduler(driver, NOOP, 8, 8, 8, Long.MAX_VALUE, () -> 0L);
+        UiScheduler scheduler = new UiScheduler(driver, NOOP, 8, 8, 8, Long.MAX_VALUE, () -> 0L, null);
         List<String> log = new ArrayList<>();
         scheduler.submitCommand(VALID, () -> {
             log.add("first");
@@ -351,7 +377,7 @@ public final class SchedulerProbeV2 {
 
     private static void verifyCloseClearsQueues() {
         Driver driver = new Driver();
-        UiScheduler scheduler = new UiScheduler(driver, NOOP, 8, 8, 8, Long.MAX_VALUE, () -> 0L);
+        UiScheduler scheduler = new UiScheduler(driver, NOOP, 8, 8, 8, Long.MAX_VALUE, () -> 0L, null);
         scheduler.submitCommand(VALID, () -> Unit.INSTANCE);
         scheduler.submitState("pending", VALID, () -> Unit.INSTANCE);
         scheduler.close();

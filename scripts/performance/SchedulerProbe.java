@@ -38,7 +38,7 @@ public final class SchedulerProbe {
 
     private static void verifyArraySnapshot() {
         Driver driver = new Driver();
-        UiScheduler scheduler = new UiScheduler(driver, NOOP, 2, 2, 2, Long.MAX_VALUE, () -> 0L);
+        UiScheduler scheduler = new UiScheduler(driver, NOOP, 2, 2, 2, Long.MAX_VALUE, () -> 0L, null);
         ScheduledOperation[] input = {
                 new ScheduledOperation("first", VALID, ACTION),
                 new ScheduledOperation("second", VALID, ACTION),
@@ -78,7 +78,7 @@ public final class SchedulerProbe {
 
     private static void measure(String scenario, int size, int warmup, int iterations, ThreadMXBean allocation) {
         Driver driver = new Driver();
-        UiScheduler scheduler = new UiScheduler(driver, NOOP, size, size, size, Long.MAX_VALUE, () -> 0L);
+        UiScheduler scheduler = new UiScheduler(driver, NOOP, size, size, size, Long.MAX_VALUE, () -> 0L, null);
         Object[] slots = new Object[size];
         List<ScheduledOperation> batch = new ArrayList<>();
         for (int index = 0; index < size; index++) {

@@ -1,6 +1,7 @@
 package io.github.jichuo1.meguviz.ui.scheduler
 
 import java.util.ArrayDeque
+import java.util.concurrent.atomic.AtomicBoolean
 
 enum class SchedulerState { ACTIVE, PAUSED, FAULTED, CLOSED }
 
@@ -43,8 +44,31 @@ data class SchedulerCounters(
 )
 
 /**
+ * Non-blocking owner-thread entry point used by the asynchronous submission path.
+ *
+ * This is the same shape as `OwnerDispatcher` in MeguvizAndroid, redeclared here so ui-core stays
+ * independent of the sibling library.
+ */
+fun interface OwnerThreadDispatcher {
+    /**
+     * Arranges for [callback] to run on the owner thread. Must not block. Returns false when the
+     * owner refused the dispatch (for example its looper is quitting), in which case the callback
+     * will not run.
+     *
+     * Takes a [Runnable] so this is shape-identical to `OwnerDispatcher.post` in MeguvizAndroid,
+     * keeping the two independent libraries' contracts comparable.
+     */
+    fun post(callback: Runnable): Boolean
+}
+
+/**
  * Owner-thread-only bounded scheduler. States coalesce by slot; commands and batches use FIFO.
  * Channels have no total order. Reentrant work never enters the current frame snapshot.
+ *
+ * A [dispatcher] is optional: without one the scheduler stays owner-thread-only and the
+ * `submit*Async` entry points report [RejectionReason.CLOSED]. With one, they stage work in a
+ * bounded handoff and merge it on the owner thread, so any number of background updates costs one
+ * owner dispatch and one frame request.
  */
 class UiScheduler(
     driver: UiFrameDriver,
@@ -54,6 +78,7 @@ class UiScheduler(
     val maxOperationsPerFrame: Int = 64,
     val maxFrameWorkNanos: Long = 2_000_000,
     private val nanoTime: () -> Long = System::nanoTime,
+    private val dispatcher: OwnerThreadDispatcher? = null,
 ) : AutoCloseable {
     private class Batch(val operations: Array<ScheduledOperation?>) {
         var applied = 0
@@ -206,6 +231,18 @@ class UiScheduler(
     private var spareCommands: ArrayDeque<Any>? = null
     private var spareGroupSet: MutableSet<Any>? = null
     private var spareGroupList: MutableList<Any>? = null
+    // --- Asynchronous submission handoff ---------------------------------------------
+    // Producers append here under `handoffLock` from any thread; the owner merges everything into
+    // the queues in [mergeHandoff]. Keeping the two structures separate leaves the owner fast path
+    // (submitState/submitCommand/applyState) completely lock-free.
+    private val handoffLock = Any()
+    private val handoffStates = linkedMapOf<Any, StateEntry>()
+    private val handoffCommands = ArrayDeque<ScheduledOperation>()
+
+    /** Coalescing performed by producers; folded into [coalesced] on the owner at merge time. */
+    private var handoffCoalesced = 0L
+    private val handoffDispatchPending = AtomicBoolean(false)
+    private val handoffDrain = Runnable { mergeHandoff() }
     private var nextStateGroups = ArrayDeque<Any>(stateCapacity)
     private var overlappingStates = 0
     private var pendingCommands = 0
@@ -225,6 +262,9 @@ class UiScheduler(
     private var drained = 0L
 
     val driverOwner: String = checkNotNull(driver).owner
+
+    /** Volatile so the asynchronous entry points can read it from producer threads. */
+    @Volatile
     var state: SchedulerState = SchedulerState.ACTIVE
         private set
     var failure: SchedulerFailure? = null
@@ -260,6 +300,18 @@ class UiScheduler(
     fun submitState(slot: Any, isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
         assertOwner()
         rejectionForState()?.let { return reject(it) }
+        val result = enqueueState(slot, isValid, action)
+            ?: return reject(RejectionReason.STATE_CAPACITY)
+        requestIfNeeded()
+        return result
+    }
+
+    /**
+     * Queues one state entry on the owner thread. Returns null when the queue is full for this new
+     * slot, in which case nothing was queued; otherwise the usual [SubmitResult.Accepted] /
+     * [SubmitResult.Coalesced] verdict.
+     */
+    private fun enqueueState(slot: Any, isValid: () -> Boolean, action: () -> Unit): SubmitResult? {
         // Coalescing fast path: the slot is already queued, so overwrite its entry in place. No
         // allocation, and the slot keeps the queue position that preserves group round-robin.
         val queued = states[slot]
@@ -269,18 +321,14 @@ class UiScheduler(
             coalesced++
             released++
             accepted++
-            requestIfNeeded()
             return SubmitResult.Coalesced
         }
         // A brand-new slot is the only case that can hit the bound; an overlapping slot already
         // counted in pendingStateCount stays admissible.
-        if (pendingStateCount >= stateCapacity && frameStates?.containsKey(slot) != true) {
-            return reject(RejectionReason.STATE_CAPACITY)
-        }
+        if (pendingStateCount >= stateCapacity && frameStates?.containsKey(slot) != true) return null
         states[slot] = StateEntry(isValid, action)
         if (frameStates?.containsKey(slot) == true) overlappingStates++
         accepted++
-        requestIfNeeded()
         return SubmitResult.Accepted
     }
 
@@ -324,10 +372,114 @@ class UiScheduler(
         return if (queuedNewSlot) SubmitResult.Accepted else SubmitResult.Coalesced
     }
 
+    /**
+     * Non-blocking state submission from any thread.
+     *
+     * The update is staged in a bounded handoff and merged into the owner queues on the owner
+     * thread, where updates for the same slot posted in the meantime have already collapsed into a
+     * single entry. One owner dispatch serves any number of staged updates, so a background producer
+     * does not need its own `Handler.post` per update and does not cause extra frame requests.
+     *
+     * Rejection matches [submitState] for the scheduler-level conditions (PAUSED / FAULTED /
+     * CLOSED, plus CLOSED when no [dispatcher] was supplied). Capacity is checked against the
+     * handoff, whose bound is [stateCapacity]; an accepted update that finds the owner queue full at
+     * merge time stays staged and is retried on a later frame — it is never dropped.
+     */
+    fun submitStateAsync(slot: Any, isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
+        rejectionForState()?.let { return reject(it) }
+        val dispatcher = dispatcher ?: return reject(RejectionReason.CLOSED)
+        var coalesced = false
+        synchronized(handoffLock) {
+            val existing = handoffStates[slot]
+            if (existing != null) {
+                // Same in-place reuse as the owner fast path: a burst for one hot slot allocates
+                // nothing, and the slot keeps its staged position.
+                existing.isValid = isValid
+                existing.action = action
+                handoffCoalesced++
+                coalesced = true
+            } else {
+                if (handoffStates.size >= stateCapacity) {
+                    return reject(RejectionReason.STATE_CAPACITY)
+                }
+                handoffStates[slot] = StateEntry(isValid, action)
+            }
+        }
+        if (!scheduleHandoffDispatch(dispatcher)) return reject(RejectionReason.CLOSED)
+        return if (coalesced) SubmitResult.Coalesced else SubmitResult.Accepted
+    }
+
+    /** Non-blocking command submission from any thread; see [submitStateAsync]. */
+    fun submitCommandAsync(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
+        rejectionForState()?.let { return reject(it) }
+        val dispatcher = dispatcher ?: return reject(RejectionReason.CLOSED)
+        synchronized(handoffLock) {
+            if (handoffCommands.size >= commandCapacity) {
+                return reject(RejectionReason.COMMAND_CAPACITY)
+            }
+            handoffCommands.addLast(ScheduledOperation("command", isValid, action))
+        }
+        return if (scheduleHandoffDispatch(dispatcher)) SubmitResult.Accepted
+        else reject(RejectionReason.CLOSED)
+    }
+
+    /**
+     * Posts [handoffDrain] once for any number of pending updates. Returns false when the owner
+     * refused the dispatch; the staged work stays for a later call.
+     */
+    private fun scheduleHandoffDispatch(dispatcher: OwnerThreadDispatcher): Boolean {
+        if (!handoffDispatchPending.compareAndSet(false, true)) return true
+        if (dispatcher.post(handoffDrain)) return true
+        handoffDispatchPending.set(false)
+        return false
+    }
+
+    /**
+     * Owner thread only. Merges the handoff into the owner queues using the same rules as
+     * [submitState]/[submitCommand]. Updates that do not fit stay staged: a queue at capacity
+     * always has work pending, so a frame is coming and a later merge will find room.
+     */
+    private fun mergeHandoff() {
+        handoffDispatchPending.set(false)
+        assertOwner()
+        var mergedAny = false
+        synchronized(handoffLock) {
+            if (handoffStates.isEmpty() && handoffCommands.isEmpty()) return
+            val stagedStates = handoffStates.entries.toList()
+            handoffStates.clear()
+            val stagedCommands = handoffCommands.toList()
+            handoffCommands.clear()
+            for ((slot, entry) in stagedStates) {
+                if (enqueueState(slot, entry.isValid, entry.action) == null) handoffStates[slot] = entry
+            }
+            for (operation in stagedCommands) {
+                if (pendingCommands >= commandCapacity) {
+                    handoffCommands.addLast(operation)
+                    continue
+                }
+                commands.addLast(operation)
+                pendingCommands++
+                accepted++
+            }
+            if (handoffCoalesced > 0L) {
+                coalesced += handoffCoalesced
+                released += handoffCoalesced
+                handoffCoalesced = 0L
+            }
+            mergedAny = true
+        }
+        if (mergedAny) requestIfNeeded()
+    }
+
     fun submitCommand(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
         assertOwner()
         rejectionForState()?.let { return reject(it) }
-        if (pendingCommands >= commandCapacity) return reject(RejectionReason.COMMAND_CAPACITY)
+        return enqueueCommand(isValid, action) ?: reject(RejectionReason.COMMAND_CAPACITY)
+    }
+
+    /** Owner-thread counterpart of [enqueueState]; null means the command queue is full. */
+    private fun enqueueCommand(isValid: () -> Boolean, action: () -> Unit): SubmitResult? {
+        if (pendingCommands >= commandCapacity) return null
         return enqueue(ScheduledOperation("command", isValid, action))
     }
 
@@ -506,6 +658,8 @@ class UiScheduler(
 
     private fun drain(budget: FrameBudget) {
         check(!draining) { "Nested frame delivery is not supported" }
+        // Staged background work joins this frame instead of waiting for another dispatch.
+        mergeHandoff()
         draining = true
         drained++
         frameStates = states
@@ -773,6 +927,13 @@ class UiScheduler(
 
     private fun clearQueues() {
         released += states.size + (frameStates?.size ?: 0) + pendingCommands
+        synchronized(handoffLock) {
+            released += handoffStates.size + handoffCommands.size + handoffCoalesced
+            handoffStates.clear()
+            handoffCommands.clear()
+            handoffCoalesced = 0L
+            handoffDispatchPending.set(false)
+        }
         states.clear()
         commands.forEach { if (it is Batch) it.clear() }
         commands.clear()
