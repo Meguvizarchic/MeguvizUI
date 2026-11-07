@@ -123,6 +123,21 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 ### 跨库联合调优
 
+2026-11-07 的 exa 联合调研（报告见会话研究副本）给出 8 条建议，按收益/成本排序，全部要求显式启用、可独立回退：
+
+| # | 建议 | 适用层 | 显式启用方式 |
+| --- | --- | --- | --- |
+| R1 | 把帧预算真源贯通到调度决策（`FrameTick.deadlineNanos()` 作为唯一数值真源） | MeguvizAndroid | `meguviz.frame.budget=explicit` |
+| R2 | 统一 vsync fan-out 为「单入口派发 + 订阅」，桥接模块不得各自 `postFrameCallback` | ui-frame-shared / 各桥 | `enableSharedFrameDriver=true` + 编译期断言 |
+| R3 | 把「同帧同槽合并」扩展到桥接栈的 begin/commit 往返 | MeguvizUI / Drawable / Lumen | `meguviz.jointCommit` |
+| R4 | 无锁队列拓扑显式化（SPSC / MPSC / multicast），不动 `BoundedMailbox` 语义 | MeguvizAndroid | `meguviz.queue.topology=auto` |
+| R5 | `BoundedMailbox` 的锁内 O(n) 移除改为 tombstone + owner 延迟清理 | MeguvizAndroid | `meguviz.queue.tombstone=true` |
+| R6 | 帧预算在层间传递的显式契约（携带 deadline 或显式声明未知，禁止裸 null/字符串） | 全部四层 | `FrameBudget.isKnown()` 检查 |
+| R7 | 跨线程 handoff 的 wakeup 合并（conflated / 单次唤醒） | MeguvizAndroid | `meguviz.handoff.coalesce=true`（API 28+ 分支） |
+| R8 | 联合收益的可观测性与门槛（FrameMetrics / FrameTimeline / Perfetto 探针 + 开关 A/B） | 全部四层 | `meguviz.bridge.telemetry=true` |
+
+优先级：先做 **R1 + R6**（改动面小、是其他建议的度量基础），再做 **R2 + R3**（「联合」的核心），**R4 + R5** 必须在有 profile 证据之后，**R7 + R8** 收尾。R1 本轮已实施（`WindowSession.open` 默认改用 `BudgetFrameDriver`）。
+
 三库桥接模块互不 import，「桥接可选」在模块级成立（已核对源码，并经独立对抗复核确认）。经交叉复核**确认**的联合调优点：
 
 - **background 归属无共同注册表**：Lumen 侧 `LumenSurfaceBridge` 用宿主传入的 `BindingScope.claim`，Drawable 侧 `RecipeBackground` 用每次新建的独立 `BindingScope` 走 `UiSession.bind`；两个 `BindingScope` 之间只在同 scope 内才互斥，跨栈没有交集，`LumenSurfaceSession` 遇到同 View 重复绑定时静默替换而不报错。混用两套桥时建议引入可选的共享登记处，默认关闭。
