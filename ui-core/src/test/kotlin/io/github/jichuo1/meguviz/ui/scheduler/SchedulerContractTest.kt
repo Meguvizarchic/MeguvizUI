@@ -651,6 +651,130 @@ class SchedulerContractTest {
         }
     }
 
+    @Test fun submitStatesDeduplicatesWithinBatchAndKeepsTheLastValue() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver)
+        val log = mutableListOf<String>()
+        val result = scheduler.submitStates(listOf(
+            StateUpdate("title") { log += "first" },
+            StateUpdate("title") { log += "second" },
+            StateUpdate("body") { log += "body" },
+        ))
+        // "title" and "body" are new slots, so the batch queued new work despite the inner coalesce.
+        assertEquals(SubmitResult.Accepted, result)
+        assertEquals(1, driver.pendingCount)
+        driver.tick()
+        assertEquals(listOf("second", "body"), log)
+        assertEquals(1L, scheduler.counters.coalescedStates)
+        assertEquals(3L, scheduler.counters.releasedOperations)
+    }
+
+    @Test fun submitStatesReportsCoalescedWhenEveryEntryReplacedAQueuedSlot() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver)
+        val log = mutableListOf<String>()
+        scheduler.submitState("title") { log += "old" }
+        assertEquals(SubmitResult.Coalesced, scheduler.submitStates(listOf(
+            StateUpdate("title") { log += "new" },
+            StateUpdate("title") { log += "newer" },
+        )))
+        driver.tick()
+        assertEquals(listOf("newer"), log)
+    }
+
+    @Test fun submitStatesReportsAcceptedWhenAtLeastOneSlotIsNew() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver)
+        val log = mutableListOf<String>()
+        scheduler.submitState("title") { log += "queued" }
+        assertEquals(SubmitResult.Accepted, scheduler.submitStates(listOf(
+            StateUpdate("title") { log += "latest" },
+            StateUpdate("subtitle") { log += "new" },
+        )))
+        driver.tick()
+        assertEquals(listOf("latest", "new"), log)
+    }
+
+    @Test fun submitStatesAdmitsPerEntryExactlyLikeRepeatedSubmitState() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, stateCapacity = 2, commandCapacity = 2)
+        val log = mutableListOf<String>()
+        assertEquals(SubmitResult.Rejected(RejectionReason.EMPTY_BATCH), scheduler.submitStates(emptyList()))
+        assertEquals(SubmitResult.Rejected(RejectionReason.STATE_CAPACITY), scheduler.submitStates(listOf(
+            StateUpdate("a") { log += "a" }, StateUpdate("b") { log += "b" }, StateUpdate("c") {},
+        )))
+        // The first two entries were admitted before the third hit the bound, so the batch behaves
+        // like three sequential submitState calls rather than rolling back.
+        assertEquals(2, scheduler.pendingStateCount)
+        // The partially admitted batch must still schedule its frame.
+        assertEquals(1, driver.pendingCount)
+        driver.tick()
+        assertEquals(listOf("a", "b"), log)
+        assertEquals(0, scheduler.pendingStateCount)
+        scheduler.pause()
+        assertEquals(SubmitResult.Rejected(RejectionReason.PAUSED), scheduler.submitStates(listOf(StateUpdate("d") {})))
+    }
+
+    @Test fun coalescingSubmitReusesTheQueuedEntryWithoutTouchingTheFrameSnapshot() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 1)
+        val log = mutableListOf<String>()
+        // Frame 1 applies only "trigger"; its action coalesces "target" for frame 2. The "target"
+        // value already sitting in the frame-1 snapshot must not be the one mutated.
+        scheduler.submitState("trigger") {
+            // "target" is not in the incoming queue yet (it is only in the frame snapshot), so this
+            // is a new slot that overlaps the snapshot; it supersedes the old value next frame.
+            assertEquals(SubmitResult.Accepted, scheduler.submitState("target") { log += "queued" })
+        }
+        scheduler.submitState("target") { log += "snapshot" }
+        driver.tick()
+        assertEquals(emptyList<String>(), log)
+        assertEquals(1, scheduler.pendingStateCount)
+        driver.tick()
+        assertEquals(listOf("queued"), log)
+        assertEquals(0, scheduler.pendingStateCount)
+    }
+
+    @Test fun submitStatesKeepsGroupRoundRobinAcrossFrames() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 1)
+        val log = mutableListOf<String>()
+        scheduler.submitStates(listOf(
+            StateUpdate(StateSlot("a", 0)) { log += "a0" },
+            StateUpdate(StateSlot("b", 0)) { log += "b0" },
+            StateUpdate(StateSlot("a", 1)) { log += "a1" },
+        ))
+        repeat(3) { driver.tick() }
+        assertEquals(listOf("a0", "b0", "a1"), log)
+    }
+
+    @Test fun discardInvalidStillPrunesGroupsWhenASlotIsRemoved() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, stateCapacity = 4, maxOperations = 1)
+        var valid = true
+        val log = mutableListOf<String>()
+        scheduler.submitState(StateSlot("a", 0)) { log += "a0" }
+        scheduler.submitState(StateSlot("b", 0), { valid }) { log += "b0" }
+        valid = false
+        scheduler.discardInvalid()
+        driver.tick()
+        assertEquals(listOf("a0"), log)
+        assertEquals(0, scheduler.pendingStateCount)
+    }
+
+    @Test fun discardInvalidWithoutRemovalsKeepsGroupRoundRobin() {
+        val driver = VirtualFrameDriver()
+        val scheduler = scheduler(driver, maxOperations = 1)
+        val log = mutableListOf<String>()
+        repeat(4) { index -> scheduler.submitState(StateSlot("a", index)) { log += "a$index" } }
+        scheduler.submitState(StateSlot("b", 0)) { log += "b" }
+        // Nothing is stale, so this is a pure rescan: it must not disturb the queued group order.
+        scheduler.discardInvalid()
+        repeat(5) { driver.tick() }
+        assertEquals(listOf("a0", "b", "a1", "a2", "a3"), log)
+        assertEquals(0, scheduler.pendingStateCount)
+    }
+
     private class DistinctBinding(val id: Int) {
         override fun hashCode() = id
         override fun equals(other: Any?): Boolean = other is DistinctBinding && id == other.id

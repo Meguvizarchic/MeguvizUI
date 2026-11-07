@@ -4,6 +4,7 @@ import io.github.jichuo1.meguviz.ui.scheduler.FrameTicket;
 import io.github.jichuo1.meguviz.ui.scheduler.RejectionReason;
 import io.github.jichuo1.meguviz.ui.scheduler.ScheduledOperation;
 import io.github.jichuo1.meguviz.ui.scheduler.StateSlot;
+import io.github.jichuo1.meguviz.ui.scheduler.StateUpdate;
 import io.github.jichuo1.meguviz.ui.scheduler.SubmitResult;
 import io.github.jichuo1.meguviz.ui.scheduler.UiFrameDriver;
 import io.github.jichuo1.meguviz.ui.scheduler.UiScheduler;
@@ -83,7 +84,8 @@ public final class SchedulerProbeV2 {
         ThreadMXBean allocation = allocationBean();
         System.out.println("scenario,size,iterations,median_nanos,p95_nanos,p99_nanos,bytes_per_round");
         for (String scenario : new String[]{
-                "command-only", "command-drain", "state-full", "state-drain", "state-reentrant", "state-partial"
+                "command-only", "command-drain", "state-full", "state-drain", "state-reentrant",
+                "state-partial", "state-coalesce", "state-batch", "state-discard"
         }) {
             for (int size : new int[]{16, 64, 256}) {
                 measure(scenario, size, warmup, iterations, allocation);
@@ -176,6 +178,24 @@ public final class SchedulerProbeV2 {
                         return Unit.INSTANCE;
                     });
                 }
+                return;
+            case "state-coalesce":
+                // The animated-property case: one hot slot resubmitted every frame.
+                for (int index = 0; index < fixture.slots.length; index++) {
+                    scheduler.submitState(fixture.slots[0], VALID, ACTION);
+                }
+                return;
+            case "state-batch":
+                // The same-semantic batch entry; the caller-side StateUpdate objects are part of the
+                // measured cost, so this scenario is not comparable to per-call submitState.
+                List<StateUpdate> batch = new ArrayList<>(fixture.slots.length);
+                for (Object slot : fixture.slots) batch.add(new StateUpdate(slot, VALID, ACTION));
+                scheduler.submitStates(batch);
+                return;
+            case "state-discard":
+                // rebind/release storm: the pending state queue is rescanned on every call.
+                for (Object slot : fixture.slots) scheduler.submitState(slot, VALID, ACTION);
+                scheduler.discardInvalid();
                 return;
             default:
                 throw new AssertionError(scenario);

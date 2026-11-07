@@ -73,6 +73,20 @@ class UiScheduler(
     }
 
     /**
+     * Mutable value stored in the state queues.
+     *
+     * One entry object per slot is reused across coalescing submissions, so the common "the same
+     * property is submitted again before the frame" path allocates nothing and keeps the slot's
+     * original queue position. An entry is owned by exactly one queue at a time: [states] and
+     * [frameStates] are distinct maps holding distinct entries, so mutating the queued entry can
+     * never leak into the frame snapshot being drained.
+     */
+    private class StateEntry(
+        var isValid: () -> Boolean,
+        var action: () -> Unit,
+    )
+
+    /**
      * Reusable open-addressing group table. Group ids are assigned in insertion order, so
      * [keyAt] iterates groups in the same order as the previous LinkedHashMap implementation.
      * Only these index buffers are reused across frames; the state/command queues are separate.
@@ -178,17 +192,17 @@ class UiScheduler(
         var groups: GroupTable,
     )
 
-    private var states = linkedMapOf<Any, ScheduledOperation>()
+    private var states = linkedMapOf<Any, StateEntry>()
     private var driver: UiFrameDriver? = driver
     // Command queue entries are either a single ScheduledOperation (submitCommand fast path,
     // no Batch/array allocation) or a Batch (submitBatch).
     private var commands = ArrayDeque<Any>()
-    private var frameStates: LinkedHashMap<Any, ScheduledOperation>? = null
+    private var frameStates: LinkedHashMap<Any, StateEntry>? = null
     private var frameCommands: ArrayDeque<Any>? = null
     private var frameGroups: ArrayDeque<Any>? = null
     private var frameIndex: StateIndex? = null
     private var spareIndex: StateIndex? = null
-    private var spareStates: LinkedHashMap<Any, ScheduledOperation>? = null
+    private var spareStates: LinkedHashMap<Any, StateEntry>? = null
     private var spareCommands: ArrayDeque<Any>? = null
     private var spareGroupSet: MutableSet<Any>? = null
     private var spareGroupList: MutableList<Any>? = null
@@ -246,23 +260,68 @@ class UiScheduler(
     fun submitState(slot: Any, isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
         assertOwner()
         rejectionForState()?.let { return reject(it) }
-        // Fast path (room available) does a single put() lookup. Only at capacity do we resolve
-        // whether this slot is a replacement, so the rejection path allocates nothing.
-        if (pendingStateCount >= stateCapacity && frameStates?.containsKey(slot) != true &&
-            !states.containsKey(slot)
-        ) {
-            return reject(RejectionReason.STATE_CAPACITY)
-        }
-        val previous = states.put(slot, ScheduledOperation("state", isValid, action))
-        val replacing = previous != null
-        if (!replacing && frameStates?.containsKey(slot) == true) overlappingStates++
-        accepted++
-        if (previous != null) {
+        // Coalescing fast path: the slot is already queued, so overwrite its entry in place. No
+        // allocation, and the slot keeps the queue position that preserves group round-robin.
+        val queued = states[slot]
+        if (queued != null) {
+            queued.isValid = isValid
+            queued.action = action
             coalesced++
             released++
+            accepted++
+            requestIfNeeded()
+            return SubmitResult.Coalesced
+        }
+        // A brand-new slot is the only case that can hit the bound; an overlapping slot already
+        // counted in pendingStateCount stays admissible.
+        if (pendingStateCount >= stateCapacity && frameStates?.containsKey(slot) != true) {
+            return reject(RejectionReason.STATE_CAPACITY)
+        }
+        states[slot] = StateEntry(isValid, action)
+        if (frameStates?.containsKey(slot) == true) overlappingStates++
+        accepted++
+        requestIfNeeded()
+        return SubmitResult.Accepted
+    }
+
+    /**
+     * Submits one same-semantic set of slot updates as a unit: a single owner check, a single frame
+     * request and in-batch deduplication by slot.
+     *
+     * Admission is per entry and identical to calling [submitState] for each update in order, so a
+     * batch that overruns [stateCapacity] leaves the earlier entries queued rather than rolling
+     * back. The last update for a slot wins. Returns [SubmitResult.Coalesced] when every entry
+     * replaced an already-queued slot, and [SubmitResult.Accepted] when at least one new slot was
+     * queued.
+     */
+    fun submitStates(updates: List<StateUpdate>): SubmitResult {
+        assertOwner()
+        rejectionForState()?.let { return reject(it) }
+        if (updates.isEmpty()) return reject(RejectionReason.EMPTY_BATCH)
+        var queuedNewSlot = false
+        for (update in updates) {
+            val queued = states[update.slot]
+            if (queued != null) {
+                queued.isValid = update.isValid
+                queued.action = update.action
+                coalesced++
+                released++
+                accepted++
+                continue
+            }
+            if (pendingStateCount >= stateCapacity && frameStates?.containsKey(update.slot) != true) {
+                // Entries admitted before the rejection are already queued, so they still need a
+                // frame; requestIfNeeded() is a no-op when one is already pending.
+                requestIfNeeded()
+                return reject(RejectionReason.STATE_CAPACITY)
+            }
+            states[update.slot] = StateEntry(update.isValid, update.action)
+            if (frameStates?.containsKey(update.slot) == true) overlappingStates++
+            accepted++
+            queuedNewSlot = true
         }
         requestIfNeeded()
-        return if (replacing) SubmitResult.Coalesced else SubmitResult.Accepted
+        return if (queuedNewSlot) SubmitResult.Accepted else SubmitResult.Coalesced
     }
 
     fun submitCommand(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
@@ -328,15 +387,21 @@ class UiScheduler(
     fun discardInvalid() {
         assertOwner()
         if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
+        var removedAny = false
         val stateQueues = listOfNotNull(states, frameStates)
         for (queue in stateQueues) {
-            for ((slot, operation) in queue.toMap()) {
+            // Key snapshot, not a map copy: a validator may re-enter the scheduler, so the queue
+            // must not be iterated directly. Keys cost one reference each; a toMap() copy would
+            // allocate a full entry per slot on every rebind/release.
+            for (slot in queue.keys.toList()) {
                 if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
-                val valid = checkPending(operation, 0, 0) ?: return
-                if (!valid && queue[slot] === operation) {
+                val entry = queue[slot] ?: continue
+                val valid = checkPending("state", entry.isValid, 0, 0) ?: return
+                if (!valid && queue[slot] === entry) {
                     val other = if (queue === states) frameStates else states
                     if (other?.containsKey(slot) == true) overlappingStates--
                     queue.remove(slot)
+                    removedAny = true
                     stale++
                     released++
                 }
@@ -348,10 +413,11 @@ class UiScheduler(
                     for (index in entry.cursor until entry.operations.size) {
                         if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
                         val operation = entry.operations[index] ?: continue
-                        val valid = checkPending(operation, index, entry.applied) ?: return
+                        val valid = checkPending(operation.label, operation.isValid, index, entry.applied) ?: return
                         if (!valid && queue.contains(entry) && entry.operations[index] === operation) {
                             entry.remove(index)
                             pendingCommands--
+                            removedAny = true
                             stale++
                             released++
                         }
@@ -361,26 +427,31 @@ class UiScheduler(
                     if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
                     val operation = entry as? ScheduledOperation
                         ?: error("unexpected command entry: ${entry::class.java.name}")
-                    val valid = checkPending(operation, 0, 0) ?: return
+                    val valid = checkPending(operation.label, operation.isValid, 0, 0) ?: return
                     if (!valid && queue.contains(entry)) {
                         queue.remove(entry)
                         pendingCommands--
+                        removedAny = true
                         stale++
                         released++
                     }
                 }
             }
         }
-        val groups = (states.keys + (frameStates?.keys ?: emptySet())).map(::stateGroup).toSet()
-        nextStateGroups.removeAll { it !in groups }
-        frameGroups?.removeAll { it !in groups }
+        // Group order only goes stale when a group loses its last slot. A pure rescan (the common
+        // rebind/release case) keeps every group, so rebuilding the set would be pure allocation.
+        if (removedAny) {
+            val groups = (states.keys + (frameStates?.keys ?: emptySet())).map(::stateGroup).toSet()
+            nextStateGroups.removeAll { it !in groups }
+            frameGroups?.removeAll { it !in groups }
+        }
         if (pendingStateCount == 0 && pendingCommandCount == 0) cancelFrame()
     }
 
-    private fun checkPending(operation: ScheduledOperation, index: Int, appliedInBatch: Int): Boolean? = try {
-        operation.isValid()
+    private fun checkPending(label: String, isValid: () -> Boolean, index: Int, appliedInBatch: Int): Boolean? = try {
+        isValid()
     } catch (error: Throwable) {
-        fault(operation.label, index, appliedInBatch, "validation", error)
+        fault(label, index, appliedInBatch, "validation", error)
         if (error is Error) throw error
         null
     }
@@ -535,12 +606,12 @@ class UiScheduler(
             if (head < 0) continue
             val slot = index.slots[head]!!
             index.groups.head[id] = index.next[head]
-            val operation = queue.remove(slot)!!
+            val entry = queue.remove(slot)!!
             if (states.containsKey(slot)) overlappingStates--
             head = index.groups.head[id]
             while (head >= 0 && !queue.containsKey(index.slots[head]!!)) head = index.next[head]
             if (head >= 0) groups.addLast(group)
-            apply(operation, 0, 0)
+            apply("state", entry.isValid, entry.action, 0, 0)
             return
         }
     }
@@ -555,7 +626,7 @@ class UiScheduler(
         return bound
     }
 
-    private fun indexStates(queue: Map<Any, ScheduledOperation>): StateIndex {
+    private fun indexStates(queue: Map<Any, StateEntry>): StateIndex {
         val index = spareIndex ?: StateIndex(emptyArray(), IntArray(0), GroupTable(16, groupTableBound()))
         spareIndex = null
         val count = queue.size
@@ -650,32 +721,32 @@ class UiScheduler(
             entry.remove(index)
             pendingCommands--
             if (entry.remaining == 0) queue.removeFirst()
-            if (apply(operation, index, entry.applied)) entry.applied++
+            if (apply(operation.label, operation.isValid, operation.action, index, entry.applied)) entry.applied++
         } else {
             val operation = entry as? ScheduledOperation
                 ?: error("unexpected command entry: ${entry::class.java.name}")
             queue.removeFirst()
             pendingCommands--
-            apply(operation, 0, 0)
+            apply(operation.label, operation.isValid, operation.action, 0, 0)
         }
     }
 
-    private fun apply(operation: ScheduledOperation, index: Int, appliedInBatch: Int): Boolean {
+    private fun apply(label: String, isValid: () -> Boolean, action: () -> Unit, index: Int, appliedInBatch: Int): Boolean {
         var phase = "validation"
         return try {
-            if (!operation.isValid()) {
+            if (!isValid()) {
                 stale++
                 false
             } else if (state != SchedulerState.ACTIVE) {
                 false
             } else {
                 phase = "action"
-                operation.action()
+                action()
                 applied++
                 true
             }
         } catch (error: Throwable) {
-            fault(operation.label, index, appliedInBatch, phase, error)
+            fault(label, index, appliedInBatch, phase, error)
             if (error is Error) throw error
             false
         } finally {
