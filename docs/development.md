@@ -163,8 +163,10 @@ settingsEvaluated { dependencyResolutionManagement.repositories.mavenLocal() }
 要点与限制：
 
 - 该方式验证的是「本机构建的上游 1.2.0 + 当前源码」，**不是** Central 上即将发布的字节；`gradle/verification-metadata.xml` 与 `upstream-candidates.toml` 的哈希校验必须以正式发布为准，所以这种运行要配合 `--dependency-verification=off`。
-- `ui-ref-bridge` 还需要 `meguviz-ref-core:1.2.0`，本机没有对应源码，仍无法验证。
+- `ui-ref-bridge` 需要 `meguviz-ref-core:1.2.0`。它的源码在 `D:\DevArea\MeguvizRef` 的 `release/1.2.0` 分支（领先 `main` 28 个提交，`meguviz.version=1.2.0`，含 `verification/api-baseline/ref-core.txt`），尚未合并也未发布。该分支已有 worktree `D:\DevArea\MeguvizRef.worktrees\release-120-MeguvizRef`，在那里执行 `./gradlew :ref-core:publishLibraryPublicationToMavenLocal --offline` 即可补上这个坐标。
 - MeguvizDrawable 的 `-Pmeguviz.profile=bridges` 需要 `meguviz-android-runtime` 与 `meguviz-ui-core` 的 1.2.0，可用同一 init 脚本与同两个发布步骤验证。
+
+本轮已用上述手法把三座桥全部实测通过：`ui-android-bridge` 11 例、`ui-lumen-bridge` 编译 + lint、`ui-ref-bridge` 13 例。
 
 ## 维护规则
 
