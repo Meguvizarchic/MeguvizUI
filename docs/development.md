@@ -37,6 +37,8 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 对比时保存改前/改后的源码状态和原始输出，在同一 JDK、堆参数、热身/迭代数下多进程交错运行，观察尾延迟及分配，不只挑最快一轮。HotSpot 逃逸分析可能消除临时对象，主机测量不可外推 ART；后台负载也会影响 p95/p99。此探针不是 Android 性能门禁。
 
+2026-11-07 的这一轮把状态队列的值由 `ScheduledOperation` 改为内部可变 `StateEntry`，同槽重提不再新建对象；新增 `submitStates(List<StateUpdate>)` 作为「同语义集合」入口（一次 owner 校验、一次帧请求、批内去重，逐条准入与重复调用 `submitState` 等价）；`discardInvalid` 改用键快照，且只有在真的删除了条目时才重建分组集合。同一探针上 `state-coalesce,256` 从约 6,296 B 降到 152 B，`state-discard,256` 从 54,795 B 降到 18,704 B，`state-full`/`state-partial`/`state-reentrant` 留在噪声内。`state-coalesce` 的改前值由 size=16/64 的实测（22.5 与 23.6 B 每次提交）结合 `state-batch` 相对 `state-full` 的差值推算——size=256 的直接对照会被 HotSpot 逃逸分析消除；`state-discard` 的改前值是直接实测。口径与完整数据表由会话留存。
+
 为验证兄弟 runtime 的未发布改动，可把审查并核对 SHA-256 的候选 AAR 放入独立空目录，只提取 `classes.jar`，再运行：
 
 ```sh
@@ -58,6 +60,39 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 [JointPipelineProbe.java](../scripts/performance/JointPipelineProbe.java) 检查真实候选加载位置、同键准备只执行一次、后台不写 UI、owner 交付后同槽合并、一次上游帧完成有界 drain、缓存命中同步处理和取消清理。它不执行 Android 绘制、不安装设备，也不证明 ART 性能。该探针及其编译任务均不属于默认 `check`/`verifyHost`，不向任何库的生产依赖添加兄弟库；单库用户完全不需要它。
 
 研究依据采用一手资料：[Disruptor 论文（Thompson 等，2011）](https://lmax-exchange.github.io/disruptor/files/Disruptor-1.0.pdf) 关于批量消费和预分配的讨论、[JCTools MPSC 实现](https://github.com/JCTools/JCTools/blob/master/jctools-core/src/main/java/org/jctools/queues/MpscArrayQueue.java) 的单消费者约束、[Go singleflight](https://github.com/golang/sync/blob/master/singleflight/singleflight.go) 的同键结果共享，以及 [Choreographer](https://developer.android.com/reference/android/view/Choreographer) 的 Looper 归属。这些资料用于选择设计与验证方法，不代表本库达到其服务器基准收益；本轮 Exa MCP 授权失败，以上来源为直接阅读，不计为 Exa 检索结果。
+
+## 性能调研路线（2026-11-07）
+
+本轮通过 Exa MCP 检索一手论文、AOSP 源码、Android 官方文档与开源实现（React/Flutter/Compose、JCTools/Agrona/Disruptor 等），覆盖帧调度与快路径、桥接与 IPC、语义批处理、无锁并发、Android 图形管线五个方向。完整报告与来源清单由会话留存，下表只保留可执行的结论，并标注证据等级：**已验证** = 官方文档 / AOSP 源码 / 可复现实测；**理论** = 论文或模型推导但未在本项目复现；**传闻** = 仅作数量级参考。
+
+### P0 高收益 / 低成本
+
+| 项 | 做法 | 依据 | 风险 |
+| --- | --- | --- | --- |
+| 跨线程提交入口 | 提供不阻塞的投递 API：有界聚合 + 主线程帧内 drain，替代业务自行 `Handler.post` 造成的重复排帧 | React/Flutter/Compose 均以帧为合并窗口（已验证）；Android 17 无锁 MessageQueue 官方实测主线程锁竞争 −15%、掉帧 −4%（已验证） | 内存序与可见性；队列必须有界 |
+| 动画时钟 | `ChoreographerFrameDriver` 在 API 33+ 暴露 `FrameData.getAnimationTimeNanos()`，动画插值改用该时钟 | Android 官方 `FrameData` 文档：`frameTimeNanos` 用于动画会在迟到帧后跳变（已验证） | 需保留 API ≤32 回退 |
+| 帧预算校准 | 用 `Display.getMode().getRefreshRate()` 与实测 tail 调整 `maxFrameWorkNanos` 与尾部预留 | Swappy 在慢会话把 jank 从 40% 降到 10%（已验证，游戏场景） | 预算过紧会把操作推到下一帧；需 Macrobenchmark |
+
+### P1 高收益 / 中成本
+
+| 项 | 做法 | 依据 |
+| --- | --- | --- |
+| 数据驱动预算 | 接入 `FrameMetrics` / `JankStats`，按 `frameOverrunNanos` 校准预算，并对外提供只读的每帧 overrun / deadline / 利用率统计 | Android 官方 API（已验证存在） |
+| 渲染路径 | 文档与示例优先 `RenderNode` / `SurfaceView`，避免 `TextureView` 双重合成；transform/opacity 动画优先 `RenderNode` 属性 | AOSP HWUI 源码与官方文档（已验证） |
+| 桥接语义批处理 | 跨桥调用提供批量接口，客户端在帧内收集后一次发送 | Android 官方批量调用建议；语义批处理在多篇论文中报告 5–200× 吞吐（已验证，其他系统） |
+
+### P2 待真机
+
+- ARR / `setFrameRate` 按场景降帧；着色器与 PSO 预编译消除首帧 20–80ms 编译尖峰；`targetSdk 37` 升级评估（无锁 MessageQueue、分代 GC，需排查反射私有字段与 `static final` 写入）。
+
+### 明确不可依赖
+
+- 虚拟线程（Project Loom）在 Android ART 上为 flag 实验，interpreter-only 且 JNI / `synchronized` 会 pin，不可用于生产。
+- 厂商宣传的触摸延迟改善未在本项目复现，仅作数量级参考。
+
+### 跨库联合调优
+
+三库桥接模块互不 import，「桥接可选」在模块级成立（已核对源码）。本轮源码分析另指出若干联合调优点（同语义桥之间缺共享注册表、Lumen 表面 detach 后不自动重绑等），正在交叉复核，确认后再进入实施。
 
 ## 验证边界
 
