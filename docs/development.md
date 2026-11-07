@@ -94,7 +94,7 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 三库桥接模块互不 import，「桥接可选」在模块级成立（已核对源码，并经独立对抗复核确认）。经交叉复核**确认**的联合调优点：
 
-- **background 归属无共同注册表**：Lumen 侧 `LumenSurfaceBridge` 用 `BindingScope.claim`，Drawable 侧 `RecipeBackground` 用独立 `BindingScope` 走 `UiSession.bind`，两者无交集，`LumenSurfaceSession` 遇到冲突时静默替换而不报错。混用两套桥时建议引入可选的共享登记处，默认关闭。
+- **background 归属无共同注册表**：Lumen 侧 `LumenSurfaceBridge` 用宿主传入的 `BindingScope.claim`，Drawable 侧 `RecipeBackground` 用每次新建的独立 `BindingScope` 走 `UiSession.bind`；两个 `BindingScope` 之间只在同 scope 内才互斥，跨栈没有交集，`LumenSurfaceSession` 遇到同 View 重复绑定时静默替换而不报错。混用两套桥时建议引入可选的共享登记处，默认关闭。
 - **Lumen 表面 detach 即销毁且不自动重绑**：列表回收场景会出现抖动，建议桥层提供可配置的重绑策略。
 
 以下说法经复核后**修正或降级**，不要按原样引用：
