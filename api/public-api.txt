@@ -363,6 +363,9 @@ public final class io.github.jichuo1.meguviz.ui.UiSession implements java.lang.A
   public final io.github.jichuo1.meguviz.ui.CreationEnvironment getEnvironment();
     descriptor: ()Lio/github/jichuo1/meguviz/ui/CreationEnvironment;
 
+  public final void discardForBindingClose$ui_core();
+    descriptor: ()V
+
   public final io.github.jichuo1.meguviz.ui.SessionState getState();
     descriptor: ()Lio/github/jichuo1/meguviz/ui/SessionState;
 

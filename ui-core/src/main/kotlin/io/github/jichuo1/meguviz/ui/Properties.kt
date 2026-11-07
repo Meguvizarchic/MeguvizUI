@@ -111,6 +111,6 @@ class PropertyBinding<V : View, T> internal constructor(
         property = null
         val release = releaseAction
         releaseAction = null
-        try { release?.invoke() } finally { ref.session.scheduler.discardInvalid() }
+        try { release?.invoke() } finally { ref.session.discardForBindingClose() }
     }
 }

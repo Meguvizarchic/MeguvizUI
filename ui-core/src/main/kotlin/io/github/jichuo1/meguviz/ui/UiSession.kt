@@ -35,6 +35,29 @@ class UiSession(
     private val resourceDomain = EpochDomain()
     private var nextIdentity = 1L
     private var releaseDepth = 0
+    /**
+     * Greater than zero while a rebind/release batch is running, so per-binding closes skip their
+     * own `discardInvalid()` and the batch scans the pending queues once. Releasing a subtree of B
+     * bindings costs one scan instead of B+1.
+     */
+    private var discardBatch = 0
+
+    /** Runs [block] with the per-binding discard scan suppressed; the batch scans once itself. */
+    private fun <T> batchedDiscard(block: () -> T): T {
+        discardBatch++
+        try { return block() } finally { discardBatch-- }
+    }
+
+    /**
+     * [PropertyBinding.close] discards its queued work here. Inside a rebind/release batch the
+     * batch performs the single scan, so closing many bindings does not rescan the queues per
+     * binding.
+     */
+    internal fun discardForBindingClose() {
+        if (discardBatch > 0) return
+        scheduler.discardInvalid()
+    }
+
     private val nodes = linkedMapOf<Long, Node>()
     private val parentKeys = IdentityHashMap<ViewGroup, MutableSet<ViewKey>>()
     private val views = IdentityHashMap<View, Long>()
@@ -215,7 +238,7 @@ class UiSession(
         requireActive(); resolve(ref)
         val node = nodes.getValue(ref.identity)
         node.binding.advance()
-        try { runCleanup(node.cleanup) } finally { node.properties.clear(); scheduler.discardInvalid() }
+        try { batchedDiscard { runCleanup(node.cleanup) } } finally { node.properties.clear(); scheduler.discardInvalid() }
     }
 
     fun detach() {
@@ -246,8 +269,10 @@ class UiSession(
         childIds.forEach { id -> nodes[id]?.let { child -> try { releaseNode(ViewRef(this, id, child.key, child.component)) } catch (t: Throwable) { failures += t } } }
         nodes.remove(ref.identity)
         node.binding.advance()
+        // Closing the bindings is what invalidates their queued work, so the batch scan has to run
+        // after the cleanup; doing it before forced every PropertyBinding.close to scan again.
+        try { batchedDiscard { runCleanup(node.cleanup) } } catch (t: Throwable) { failures += t }
         if (releaseDepth == 1) scheduler.discardInvalid()
-        try { runCleanup(node.cleanup) } catch (t: Throwable) { failures += t }
         views.remove(node.view)
         node.parent?.let { parent ->
             unreserve(parent, node.key)
