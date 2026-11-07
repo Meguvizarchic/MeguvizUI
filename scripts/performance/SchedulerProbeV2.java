@@ -85,7 +85,8 @@ public final class SchedulerProbeV2 {
         System.out.println("scenario,size,iterations,median_nanos,p95_nanos,p99_nanos,bytes_per_round");
         for (String scenario : new String[]{
                 "command-only", "command-drain", "state-full", "state-drain", "state-reentrant",
-                "state-partial", "state-coalesce", "state-batch", "state-discard"
+                "state-partial", "state-coalesce", "state-batch", "state-discard",
+                "command-discard", "command-discard-stale"
         }) {
             for (int size : new int[]{16, 64, 256}) {
                 measure(scenario, size, warmup, iterations, allocation);
@@ -195,6 +196,21 @@ public final class SchedulerProbeV2 {
             case "state-discard":
                 // rebind/release storm: the pending state queue is rescanned on every call.
                 for (Object slot : fixture.slots) scheduler.submitState(slot, VALID, ACTION);
+                scheduler.discardInvalid();
+                return;
+            case "command-discard":
+                // The common rebind/release case: every command is still valid.
+                for (int index = 0; index < fixture.slots.length; index++) {
+                    scheduler.submitCommand(VALID, ACTION);
+                }
+                scheduler.discardInvalid();
+                return;
+            case "command-discard-stale":
+                // Half the commands are stale, so every one of them pays a queue.contains scan.
+                for (int index = 0; index < fixture.slots.length; index++) {
+                    Function0<Boolean> valid = (index & 1) == 0 ? () -> false : VALID;
+                    scheduler.submitCommand(valid, ACTION);
+                }
                 scheduler.discardInvalid();
                 return;
             default:

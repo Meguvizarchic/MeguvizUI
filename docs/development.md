@@ -85,6 +85,15 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 - ARR / `setFrameRate` 按场景降帧；着色器与 PSO 预编译消除首帧编译尖峰；`targetSdk 37` 升级评估（可获得的收益包括无锁 MessageQueue；需排查反射 `MessageQueue` 私有字段与修改 `static final` 字段，二者在 API 37 分别会失效与抛异常）。
 
+### 下一轮候选（已分析，未实施）
+
+以下两项来自源码分析与对抗复核，**尚未实施**，因为都涉及失效/清理时机语义，需设备行为矩阵兜底；记录在此供下一轮评估。
+
+- **`PropertyBinding.close` 每次触发全量 `discardInvalid`**（`ui-core/.../ui/Properties.kt:114`）。`UiSession.releaseNode` 有 `releaseDepth` 抑制，但 `PropertyBinding.close` 自身无条件调用扫描，因此一次子树释放仍会执行 B+1 次全量扫描（B 为关闭的绑定数）。host 探针无法覆盖（`PropertyBinding` 依赖真实 View），故未实测。建议：在 `UiSession` 内引入批量抑制计数，rebind/子树 release 期间只扫描一次。
+- **`discardInvalid` 命令循环的 `queue.contains` 是 O(n)**（`UiScheduler.kt:417`、`:431`，`ArrayDeque` 线性查找）。已用探针新增场景实测：`command-discard-stale,256` 相对 `command-discard,256` 分配几乎不变（8,632 vs 8,544 B/轮），中位数持平，但 **p99 从 4.2µs 劣化到 46.7µs**——O(n²) 只体现在尾部。修改需要改动命令队列结构或引入标记清除，暂缓。
+
+对抗复核同时修正了上一轮分析报告的几处偏差，记录备查：`UiScheduler` 的「最大热点」结论基于 `80e6d28` 之前的源码，本轮优化后 `state-reentrant,256`（55,560 B）才是当前最大分配场景，稳态帧仅约 36 B；`indexStates` 的「抖动重分配」前提不成立（只在容量增长到新最大值时发生）；`PrecomputedTextBinding` 为 opt-in（默认关闭），不应计入默认路径。
+
 ### 明确不可依赖
 
 - 虚拟线程（Project Loom）在 Android ART 上为 flag 实验，interpreter-only 且 JNI / `synchronized` 会 pin，不可用于生产。
