@@ -92,7 +92,16 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 ### 跨库联合调优
 
-三库桥接模块互不 import，「桥接可选」在模块级成立（已核对源码）。本轮源码分析另指出若干联合调优点（同语义桥之间缺共享注册表、Lumen 表面 detach 后不自动重绑等），正在交叉复核，确认后再进入实施。
+三库桥接模块互不 import，「桥接可选」在模块级成立（已核对源码，并经独立对抗复核确认）。经交叉复核**确认**的联合调优点：
+
+- **background 归属无共同注册表**：Lumen 侧 `LumenSurfaceBridge` 用 `BindingScope.claim`，Drawable 侧 `RecipeBackground` 用独立 `BindingScope` 走 `UiSession.bind`，两者无交集，`LumenSurfaceSession` 遇到冲突时静默替换而不报错。混用两套桥时建议引入可选的共享登记处，默认关闭。
+- **Lumen 表面 detach 即销毁且不自动重绑**：列表回收场景会出现抖动，建议桥层提供可配置的重绑策略。
+
+以下说法经复核后**修正或降级**，不要按原样引用：
+
+- 「三套同语义桥」只对 Lumen→View 绑定与 background 登记成立；三栈的 WindowSession 接入桥是不同库的适配器，不可互代。
+- 「每次 post 约 15+ 分配」未实测：post 本身约 7 个对象，15+ 是 begin+post 往返的静态估算。
+- `SkinPrefs.write` 确为主线程同步 `commit()` 且全量读回，但不是该路径唯一的磁盘 I/O。
 
 ## 验证边界
 
