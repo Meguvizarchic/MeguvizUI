@@ -23,6 +23,8 @@ class DiscardInvalidEquivalenceTest {
         fun submitCommand(isValid: () -> Boolean, action: () -> Unit): SubmitResult
         fun submitBatch(operations: List<ScheduledOperation>): SubmitResult
         fun submitState(slot: Any, isValid: () -> Boolean, action: () -> Unit): SubmitResult
+        fun submitStateAsync(slot: Any, isValid: () -> Boolean, action: () -> Unit): SubmitResult
+        fun submitCommandAsync(isValid: () -> Boolean, action: () -> Unit): SubmitResult
         fun discardInvalid()
         fun pause(clear: Boolean)
         fun resume()
@@ -33,6 +35,8 @@ class DiscardInvalidEquivalenceTest {
 
     private class Current(private val s: UiScheduler) : Target {
         override fun submitCommand(isValid: () -> Boolean, action: () -> Unit) = s.submitCommand(isValid, action)
+        override fun submitStateAsync(slot: Any, isValid: () -> Boolean, action: () -> Unit) = s.submitStateAsync(slot, isValid, action)
+        override fun submitCommandAsync(isValid: () -> Boolean, action: () -> Unit) = s.submitCommandAsync(isValid, action)
         override fun submitBatch(operations: List<ScheduledOperation>) = s.submitBatch(operations)
         override fun submitState(slot: Any, isValid: () -> Boolean, action: () -> Unit) = s.submitState(slot, isValid, action)
         override fun discardInvalid() = s.discardInvalid()
@@ -45,6 +49,8 @@ class DiscardInvalidEquivalenceTest {
 
     private class Legacy(private val s: LegacyUiScheduler) : Target {
         override fun submitCommand(isValid: () -> Boolean, action: () -> Unit) = s.submitCommand(isValid, action)
+        override fun submitStateAsync(slot: Any, isValid: () -> Boolean, action: () -> Unit) = s.submitStateAsync(slot, isValid, action)
+        override fun submitCommandAsync(isValid: () -> Boolean, action: () -> Unit) = s.submitCommandAsync(isValid, action)
         override fun submitBatch(operations: List<ScheduledOperation>) = s.submitBatch(operations)
         override fun submitState(slot: Any, isValid: () -> Boolean, action: () -> Unit) = s.submitState(slot, isValid, action)
         override fun discardInvalid() = s.discardInvalid()
@@ -63,10 +69,21 @@ class DiscardInvalidEquivalenceTest {
         private val calls = HashMap<Int, Int>()
         private var nextId = 0
         private var depth = 0
+        /** Owner dispatches posted by the async entry points; run explicitly by a program step. */
+        val posted = ArrayList<Runnable>()
+        var refuseDispatch = false
+        private val dispatcher = OwnerThreadDispatcher { runnable -> if (refuseDispatch) false else posted.add(runnable) }
         val target: Target = if (legacy) {
-            Legacy(LegacyUiScheduler(driver, {}, capacity, capacity, 5, nanoTime = { 0L }))
+            Legacy(LegacyUiScheduler(driver, {}, capacity, capacity, 5, nanoTime = { 0L }, dispatcher = dispatcher))
         } else {
-            Current(UiScheduler(driver, {}, capacity, capacity, 5, nanoTime = { 0L }))
+            Current(UiScheduler(driver, {}, capacity, capacity, 5, nanoTime = { 0L }, dispatcher = dispatcher))
+        }
+
+        fun runDispatches(): Int {
+            val batch = posted.toList()
+            posted.clear()
+            batch.forEach(Runnable::run)
+            return batch.size
         }
 
         private fun roll(id: Int, salt: Int): Int {
@@ -97,6 +114,8 @@ class DiscardInvalidEquivalenceTest {
                     r < 21 -> { log.append(" ${from}recover"); runCatching { t.recover() }.onFailure { log.append("!") } }
                     r < 26 -> { val n = newId(true); log.append(" ${from}sub$n=${t.submitCommand(validator(n), action(n))}") }
                     r < 30 -> { val n = newId(true); log.append(" ${from}st$n=${t.submitState("r${n % 3}", validator(n), action(n))}") }
+                    r < 33 -> { val n = newId(true); log.append(" ${from}ast$n=${t.submitStateAsync("r${n % 3}", validator(n), action(n))}") }
+                    r < 35 -> { val n = newId(true); log.append(" ${from}acmd$n=${t.submitCommandAsync(validator(n), action(n))}") }
                     r < 40 -> { val other = (id + r) % maxOf(1, nextId); flip(other); log.append(" ${from}flip$other") }
                     r < 42 && from == "v" -> { log.append(" throw"); throw IllegalStateException("validator $id") }
                     // A frame delivered from inside a validator: contrived for Choreographer, but it
@@ -132,7 +151,7 @@ class DiscardInvalidEquivalenceTest {
         val program = Random(seed)
         repeat(steps) { stepIndex ->
             val t = world.target
-            when (program.nextInt(100)) {
+            when (program.nextInt(110)) {
                 in 0..24 -> {
                     val id = world.newId(program.nextInt(4) != 0)
                     world.step("$stepIndex cmd$id") { t.submitCommand(world.validator(id), world.action(id)) }
@@ -149,7 +168,18 @@ class DiscardInvalidEquivalenceTest {
                     val slot = StateSlot("g${program.nextInt(3)}", program.nextInt(4))
                     world.step("$stepIndex state$id@$slot") { t.submitState(slot, world.validator(id), world.action(id)) }
                 }
-                in 50..59 -> { val id = program.nextInt(64); world.step("$stepIndex flip$id") { world.flip(id) } }
+                in 50..53 -> {
+                    val id = world.newId(program.nextInt(4) != 0)
+                    val slot = StateSlot("g${program.nextInt(3)}", program.nextInt(4))
+                    world.step("$stepIndex astate$id@$slot") { t.submitStateAsync(slot, world.validator(id), world.action(id)) }
+                }
+                in 54..55 -> {
+                    val id = world.newId(program.nextInt(4) != 0)
+                    world.step("$stepIndex acmd$id") { t.submitCommandAsync(world.validator(id), world.action(id)) }
+                }
+                in 56..58 -> world.step("$stepIndex dispatch") { world.runDispatches() }
+                59 -> world.step("$stepIndex refuse") { world.refuseDispatch = !world.refuseDispatch; world.refuseDispatch }
+                in 100..109 -> { val id = program.nextInt(64); world.step("$stepIndex flip$id") { world.flip(id) } }
                 in 60..62 -> world.step("$stepIndex invalidateAll") { world.invalidateAll() }
                 in 63..77 -> world.step("$stepIndex discard") { t.discardInvalid() }
                 in 78..92 -> world.step("$stepIndex tick") { world.driver.tick() }

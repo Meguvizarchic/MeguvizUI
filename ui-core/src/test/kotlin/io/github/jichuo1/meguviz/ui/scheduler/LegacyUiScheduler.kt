@@ -206,6 +206,9 @@ internal class LegacyUiScheduler(
     /** Producer-side rejections; folded into [rejected] on the owner. */
     private var handoffRejected = 0L
     private val handoffDispatchPending = AtomicBoolean(false)
+    /** Kept in sync with UiScheduler: a refused replacement dispatch makes the handoff terminal. */
+    @Volatile
+    private var handoffTerminated = false
     private val handoffDrain = Runnable { mergeHandoff() }
     private var nextStateGroups = ArrayDeque<Any>(stateCapacity)
     private var overlappingStates = 0
@@ -354,27 +357,36 @@ internal class LegacyUiScheduler(
     fun submitStateAsync(slot: Any, isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
         val dispatcher = dispatcher ?: return handoffReject(RejectionReason.CLOSED)
         var coalesced = false
+        var rollback: (() -> Unit)? = null
         synchronized(handoffLock) {
-            rejectionForState()?.let { return handoffReject(it) }
+            val rejection = rejectionForState()
+            if (handoffTerminated || rejection != null) {
+                return handoffReject(rejection ?: RejectionReason.CLOSED)
+            }
             val existing = handoffStates[slot]
             if (existing != null) {
-                // Same in-place reuse as the owner fast path: a burst for one hot slot allocates
-                // nothing, and the slot keeps its staged position.
+                val previousIsValid = existing.isValid
+                val previousAction = existing.action
                 existing.isValid = isValid
                 existing.action = action
                 handoffCoalesced++
                 coalesced = true
+                rollback = {
+                    existing.isValid = previousIsValid
+                    existing.action = previousAction
+                    if (handoffCoalesced > 0L) handoffCoalesced--
+                }
             } else {
                 if (handoffStates.size >= stateCapacity) {
                     return handoffReject(RejectionReason.STATE_CAPACITY)
                 }
                 handoffStates[slot] = StateEntry(isValid, action)
+                rollback = { handoffStates.remove(slot) }
             }
             handoffAccepted++
         }
         if (!scheduleHandoffDispatch(dispatcher)) {
-            abandonHandoff()
-            return handoffReject(RejectionReason.CLOSED)
+            return unwindRefusedDispatch(checkNotNull(rollback), dispatcher)
         }
         return if (coalesced) SubmitResult.Coalesced else SubmitResult.Accepted
     }
@@ -382,27 +394,33 @@ internal class LegacyUiScheduler(
     /** Non-blocking command submission from any thread; see [submitStateAsync]. */
     fun submitCommandAsync(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
         val dispatcher = dispatcher ?: return handoffReject(RejectionReason.CLOSED)
+        var rollback: (() -> Unit)? = null
         synchronized(handoffLock) {
-            rejectionForState()?.let { return handoffReject(it) }
+            val rejection = rejectionForState()
+            if (handoffTerminated || rejection != null) {
+                return handoffReject(rejection ?: RejectionReason.CLOSED)
+            }
             if (handoffCommands.size >= commandCapacity) {
                 return handoffReject(RejectionReason.COMMAND_CAPACITY)
             }
-            handoffCommands.addLast(ScheduledOperation("command", isValid, action))
+            val entry = ScheduledOperation("command", isValid, action)
+            handoffCommands.addLast(entry)
+            rollback = { handoffCommands.remove(entry) }
             handoffAccepted++
         }
         if (!scheduleHandoffDispatch(dispatcher)) {
-            abandonHandoff()
-            return handoffReject(RejectionReason.CLOSED)
+            return unwindRefusedDispatch(checkNotNull(rollback), dispatcher)
         }
         return SubmitResult.Accepted
     }
 
     /**
      * Counts a producer-side rejection under [handoffLock]. The owner-side [reject] counter is never
-     * written from a producer thread, so the two can never race.
+     * written from a producer thread, so the two can never race. Callers may already hold the lock:
+     * JVM monitors are reentrant.
      */
     private fun handoffReject(reason: RejectionReason): SubmitResult.Rejected {
-        handoffRejected++
+        synchronized(handoffLock) { handoffRejected++ }
         return SubmitResult.Rejected(reason)
     }
 
@@ -418,23 +436,33 @@ internal class LegacyUiScheduler(
     }
 
     /**
-     * Producer side. Unwinds a refused dispatch: the submission that triggered it is voided (it
-     * must not count as accepted, matching the synchronous rejection path) and the handoff is
-     * dropped so the verdict and the queue state agree.
-     *
-     * Deliberately does not fold the producer counters into the owner-side ones: those are only
-     * ever written on the owner thread, so this teardown path loses its diagnostics rather than
-     * race. Callers hold no lock.
+     * Mirrors UiScheduler's refused-dispatch unwind so the differential contract isolates only the
+     * discardInvalid sweep. See the production class for the rationale.
      */
-    private fun abandonHandoff() {
+    private fun unwindRefusedDispatch(
+        rollback: () -> Unit,
+        dispatcher: OwnerThreadDispatcher,
+    ): SubmitResult.Rejected {
+        val hasRemaining: Boolean
         synchronized(handoffLock) {
-            if (handoffAccepted > 0L) handoffAccepted--
+            rollback()
+            handoffCoalesced = 0L
+            handoffAccepted = 0L
+            handoffRejected = 1L
+            hasRemaining = handoffStates.isNotEmpty() || handoffCommands.isNotEmpty()
+        }
+        if (hasRemaining && !scheduleHandoffDispatch(dispatcher)) terminateHandoff()
+        return SubmitResult.Rejected(RejectionReason.CLOSED)
+    }
+
+    private fun terminateHandoff() {
+        synchronized(handoffLock) {
+            handoffTerminated = true
             handoffStates.clear()
             handoffCommands.clear()
             handoffCoalesced = 0L
             handoffAccepted = 0L
             handoffRejected = 0L
-            handoffDispatchPending.set(false)
         }
     }
 

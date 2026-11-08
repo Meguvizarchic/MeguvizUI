@@ -266,4 +266,46 @@ class CrossThreadSubmissionTest {
         assertEquals(10L, scheduler.counters.appliedOperations)
         assertEquals(0L, scheduler.counters.rejectedSubmissions)
     }
+
+    /**
+     * Producers race the owner's merges (both the swap fast path and, with a small capacity, the
+     * locked fallback that hands leftovers back). Every slot belongs to one producer, so "latest
+     * accepted value per slot is the value finally applied" is a total, checkable outcome.
+     */
+    @Test fun producersRacingOwnerMergesLoseNoLatestValue() {
+        val driver = VirtualFrameDriver()
+        val posted = java.util.concurrent.ConcurrentLinkedQueue<Runnable>()
+        val scheduler = UiScheduler(driver, {}, 16, 16, 8, Long.MAX_VALUE, { 0L }) { posted.add(it) }
+        val producers = 4
+        val slotsPerProducer = 6
+        val rounds = 3_000
+        val lastAccepted = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        val applied = HashMap<String, Int>()
+        val commandsAccepted = java.util.concurrent.atomic.AtomicInteger()
+        var commandsRun = 0
+        val done = CountDownLatch(producers)
+        repeat(producers) { p ->
+            Thread {
+                for (round in 0 until rounds) {
+                    val slot = "p$p-${round % slotsPerProducer}"
+                    val result = scheduler.submitStateAsync(slot) { applied[slot] = round }
+                    if (result !is SubmitResult.Rejected) lastAccepted[slot] = round
+                    if (round % 7 == 0 && scheduler.submitCommandAsync { commandsRun++ } == SubmitResult.Accepted) {
+                        commandsAccepted.incrementAndGet()
+                    }
+                }
+                done.countDown()
+            }.start()
+        }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        while (done.count > 0 || posted.isNotEmpty() || driver.pendingCount > 0) {
+            assertTrue("owner loop timed out", System.nanoTime() < deadline)
+            posted.poll()?.run()
+            driver.tick()
+        }
+        assertEquals(lastAccepted.toMap(), applied.filterKeys { lastAccepted.containsKey(it) })
+        assertEquals(commandsAccepted.get(), commandsRun)
+        assertEquals(0, scheduler.pendingStateCount)
+        assertEquals(0, scheduler.pendingCommandCount)
+    }
 }

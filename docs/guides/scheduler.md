@@ -104,10 +104,14 @@ class ScheduledOperation(val label: String = "operation",
 ### submitStates：同语义集合
 
 ```kotlin
-val result = session.scheduler.submitStates(listOf(
-    StateUpdate(slotA) { applyA(it) },
-    StateUpdate(slotB) { applyB(it) },
-))
+val slotTitle = Any()
+val slotButton = Any()
+val result = session.scheduler.submitStates(
+    listOf(
+        StateUpdate(slotTitle) { println("A") },
+        StateUpdate(slotButton) { println("B") },
+    ),
+)
 ```
 
 语义：一次 owner 校验、一次帧请求、批内按 slot 去重。准入逐条进行，与按顺序调用 `submitState` 完全等价；超出 `stateCapacity` 时前面的条目已入队，不会回滚。同一 slot 的最后一条生效。全部命中已排队槽时返回 `Coalesced`，有新增槽时返回 `Accepted`。
@@ -133,6 +137,7 @@ fun submitCommandAsync(isValid: () -> Boolean = { true }, action: () -> Unit): S
 - **帧内合并**：`drain()` 开头把暂存工作并入本帧；装不下的留在 handoff，等队列腾出位置后的下一次 merge——**被接受的更新不会被丢弃**。
 - **拒绝语义与同步入口一致**：PAUSED / FAULTED / CLOSED 返回相同原因；未装配派发器时（`UiScheduler` 直接构造且 `dispatcher = null`）返回 `CLOSED`。
 - **动作始终在 owner 线程执行**：`isValid` 与 `action` 都不会在调用方线程跑。
+- **派发器拒绝时**：返回 `CLOSED` 且只回滚本次暂存，不会清掉并发生产者已被告知 `Accepted` 的条目；残留条目会补发一次派发。若连补发也被拒绝，handoff 终止、其余暂存丢弃，此后提交一律 `CLOSED`（此时已经返回的 `Accepted` 可能不执行，属于 owner 永久不可用的边界，不能用它承载必须送达的工作）。该终止路径按既有合同丢弃这一代生产者诊断计数。
 
 成本要清楚：不同槽位的突发比同步路径多一倍 map 操作（handoff 插入 + 合并插入）。host 探针实测（N=256）：不同槽位 16,457 → 34,968 B/轮；同一槽位 152 → 240 B/轮。**收益是 owner 派发次数，不是分配**——单线程探针测不出派发成本。
 
