@@ -145,6 +145,7 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 - **R2 的强制手段**：推荐「模块边界 + ArchUnit/Konsist 之类的架构测试 + 装配期断言 + `allowDirectSource` 开关」四层，而不是只靠评审；RN 的 `ReactChoreographer` 与 Fabric 共享回调是先行例。
 - **R5 的本质**：问题不在 O(n) 本身——`ArrayDeque.remove` 是顺序 memmove（约 0.5 ns/元素），比链表指针追逐快 10–30 倍；真正的代价是**持锁执行**导致 producer 阻塞与 priority inversion。DeliQueue 的解法是「逻辑删除 O(1)（CAS 标记 + freelist）+ owner 批量物理清理（O(1) unlink，靠 backlink）」。因此 R5 的验证应先证明热点在「锁内耗时」而不是「移除复杂度」。
 - **R3 的语义**：桥接 begin/commit 应显式建模为「帧内 slot 合并」——`begin(slot)` 覆盖写 `pendingBySlot[slot]` 并只在该 slot 首次出现时请求帧；`commit(slot)` 只标记，不单独请求帧；帧回调内按 slot 应用已提交的最后一次值。与 React「一个 handler 内多次 setState = 一次 render」（实测 render 次数 −69%、rendering operations −33.3%）同构。**注意**：这些是 React 树 render 次数，映射到本项目是 `UiScheduler` 的 action 次数与下游 setter 次数，不等于帧数。
+- **R3 的落点已核实**（`33-joint-merge.md`）：桥接栈的排队层**已经合并**——`BoundedMailbox` 用 `IdentityHashMap<Slot, WorkHandle> latest` 做 per-slot latest-wins，`BindingScope` 用「新 begin 使旧 stamp 失效」做 per-key latest-wins，现有测试已锁死。真正未合并的点在 **Lumen 的应用层**：`LumenSurfaceBridge.Registration.update` → `LumenSurfaceSession.updateEntry`，只要两次 options 不相等就各自 `rebuild()+install()`（`rebuild` 会 `releaseGpu()`），**没有帧边界**。可落地方案：`LumenSurfaceSessionOptions` 增加 `coalesceUpdates`（默认 false），`Entry` 挂 pending、draw 前 flush、last-wins，桥层不动、不引依赖。本轮未实施：该落点需要真实 View/绘制才能验证，而本机无 instrumentation 设备。
 - **R4 的拓扑**：JCTools/Agrona/Disruptor **均不支持任意位置移除**，拓扑改造必须叠加 tombstone。
 
 三库桥接模块互不 import，「桥接可选」在模块级成立（已核对源码，并经独立对抗复核确认）。经交叉复核**确认**的联合调优点：
