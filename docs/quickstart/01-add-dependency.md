@@ -7,9 +7,10 @@
 - `meguviz-ui-lumen-bridge` 与 `meguviz-ui-android-bridge` 的上游尚未发布到 Maven Central，因此这两个桥**不在 Central 提供**，只能用源码构建并显式启用（`-PenableLumen=true` / `-PenableAndroid=true`）。
 
 写依赖时请确认你引用的是 `1.0.0`（已发布）还是本地候选；不要写 `1.2.0` 到 Maven Central 的坐标上。
-跨库联调可改用家族本地 `io.github.jichuo1.meguviz:meguviz-bom:1.2.0`（`/Volumes/DevEnvironment/meguviz-joint/local-maven`，
-未发布、未签名），用 `implementation(platform(...))` 后家族坐标可省略版本号；注入方式见
-`meguviz-joint/tools/meguviz-bom.init.gradle.kts`。该 BOM 只覆盖本地确有字节的 6 个 1.2.0 制品。
+跨库联调时，维护者的联合工作区里有一个未发布、未签名的本地候选 `io.github.jichuo1.meguviz:meguviz-bom:1.2.0`（只覆盖本地确有字节的
+6 个 1.2.0 制品）：它是一个本地 file Maven 仓库，**不在 Maven Central，也不在任何公开仓库里**。拿到该仓库后，把它加进
+`dependencyResolutionManagement.repositories`（`maven { url = uri("file:///<该仓库的本机路径>") }`），再用
+`implementation(platform("io.github.jichuo1.meguviz:meguviz-bom:1.2.0"))`，家族坐标即可省略版本号。普通应用请直接使用下面的 Central `1.0.0`。
 
 ## 普通应用：Maven Central
 
