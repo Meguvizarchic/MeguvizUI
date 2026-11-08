@@ -62,7 +62,25 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 同轮对抗复核（`34-adversarial-round3.md`）的结论：顺序变化不漏（有效性单调递减，后扫描是前扫描超集）、`close()` 先 `scheduler.close()` 再 release 正确、嵌套 `batchedDiscard` 计数平衡；未发现崩溃/泄漏/永久卡死缺陷。
 
-同轮复核后**刻意未做**的一项：`discardInvalid` 命令循环里的 `queue.contains(entry)` 与 `queue.remove(entry)` 在 `ArrayDeque` 上都是线性，多命令同时失效时是 O(C²)（实测 `command-discard-stale,256` 的 p99 从 4.2µs 劣化到 46.7µs，分配与中位数不变）。没做的原因：那个 `contains` 同时是校验器重入（`close()`/`pause()`/嵌套 `discardInvalid`）期间的防护——去掉它会让队列已清空或被嵌套调用搬走的条目被重复计数，修它需要引入能跨嵌套调用可见的「仍在队列中」标记，风险高于收益。留待有设备与压测条件时再评估。
+同轮复核后曾**刻意未做**的一项（`discardInvalid` 命令循环 O(C²)）已于 2026-11-08 落地，见下一段。
+
+2026-11-08 把 `discardInvalid` 的命令清理从「逐条 `ArrayDeque.contains`/`remove`」改为「逻辑释放 + 一次压实」：单条命令改用调度器私有的 `CommandEntry`（与原 `ScheduledOperation` 同为每次提交一个对象，只多一个 `queued` 布尔），任何把它移出队列的路径（`applyCommand`、`discardInvalid`、`clearQueues`）都清掉 `queued`；批次沿用「槽位置空」作为同一标记（批次只有在所有槽为 null 时才离开队列，所以 `operations[index] === operation` 本身就等价于原先的 `contains && ===`）。扫描结束（含异常/提前返回的 `finally`）压实一次，O(C)。重入语义与原 `contains` 防护一致的论证：
+
+- 标记跨嵌套调用可见：`close()`/`pause(true)`/fault 的 `clearQueues` 清掉标记，嵌套 `discardInvalid` 释放时清掉标记，嵌套帧（校验器内 `tick`）应用时清掉标记——外层随后读到 `queued=false`，与原 `contains=false` 同样跳过，不重复计数。
+- 原实现里外层快照之前已被**外层**（嵌套调用开始前）物理移除的条目不会进入嵌套调用的快照；新实现中它们仍在队列里等压实，所以嵌套调用（`commandSweeps > 1`）改用只含仍排队条目的快照，否则会多调用一次已释放条目的校验器。最外层没有待压实条目，保留原来的数组拷贝。
+- 等待压实期间队列「非空但无活命令」：`requestIfNeeded` 改用 `pendingCommands == 0` 判断（非 drain 期间二者在原实现里恒等），`drain` 在有扫描在栈上时先压实再取快照。
+
+证据：`DiscardInvalidEquivalenceTest` 把 a6b8ba5 的 `UiScheduler` 原样复制为测试内 oracle（`LegacyUiScheduler`），用 600 个种子、每个 120 步的随机程序同时驱动两者；校验器与动作按 (seed, id, 调用次数) 的确定性函数重入调度器（嵌套 `discardInvalid`、`pause(true/false)`、`resume`、`close`、`recover`、新提交、翻转有效性、抛异常、校验器内投递帧），逐步比较完整转录（每个校验器/动作调用顺序、返回值、计数器、状态、挂起数、帧请求/取消事件）——要求逐字相同，并断言覆盖率（>100 个种子含嵌套 discard、>100 个种子有 stale）。三种变异（去掉 `queued` 检查、嵌套快照不过滤、drain 不压实）各自都被该测试杀死。
+
+`SchedulerProbeV2`（OpenJDK 21.0.12.1 HotSpot、macOS arm64 主机、2000 热身/4000 迭代、改前/改后交错 6 轮、主机负载约 8.5），原始数据见 [data/2026-11-08-discard-sweep.csv](performance/data/2026-11-08-discard-sweep.csv)：
+
+| 场景 | 中位数（改前 → 改后，6 轮范围） | p99 | 分配 B/轮 |
+| --- | --- | --- | --- |
+| `command-discard-stale,256` | 16.4–21.0 µs → 3.5–5.1 µs | 21.4–35.4 µs → 5.5–13.8 µs | ~8,690 → ~8,720 |
+| `command-discard,256`（全有效） | 2.7–3.5 µs → 2.6–3.4 µs | 噪声内 | 8,528 → 8,528 |
+| `state-discard,256` | 噪声内 | 噪声内 | 18,736 → 18,736 |
+
+局限：主机 HotSpot 结果，不外推 ART；只影响 `discardInvalid` 的命令部分（状态部分本来就是 O(1) 映射查找）。
 
 为验证兄弟 runtime 的未发布改动，可把审查并核对 SHA-256 的候选 AAR 放入独立空目录，只提取 `classes.jar`，再运行：
 
@@ -112,9 +130,9 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 ### 下一轮候选（已分析，未实施）
 
-- **`discardInvalid` 命令循环的 `queue.contains` 是 O(n)**（`UiScheduler.kt`，`ArrayDeque` 线性查找）。已用探针新增场景实测：`command-discard-stale,256` 相对 `command-discard,256` 分配几乎不变（8,632 vs 8,544 B/轮），中位数持平，但 **p99 从 4.2µs 劣化到 46.7µs**——O(n²) 只体现在尾部。**未实施**：那个 `contains` 同时是校验器重入（`close()`/`pause()`/嵌套 `discardInvalid`）期间的防护——去掉它会让队列已清空或被嵌套调用搬走的条目被重复计数；修它需要引入能跨嵌套调用可见的「仍在队列中」标记，风险高于收益。留待有设备与压测条件时再评估。
+（本节原列的 `discardInvalid` 命令循环 O(n) 已于 2026-11-08 实施，见上文。）
 
-已实施并从候选移除：`PropertyBinding.close` 的逐绑定全量扫描（见上，2026-11-07 第三轮）。
+已实施并从候选移除：`PropertyBinding.close` 的逐绑定全量扫描（见上，2026-11-07 第三轮）；`discardInvalid` 命令循环的 O(C²)（2026-11-08）。
 
 对抗复核同时修正了上一轮分析报告的几处偏差，记录备查：`UiScheduler` 的「最大热点」结论基于 `80e6d28` 之前的源码，本轮优化后 `state-reentrant,256`（55,560 B）才是当前最大分配场景，稳态帧仅约 36 B；`indexStates` 的「抖动重分配」前提不成立（只在容量增长到新最大值时发生）；`PrecomputedTextBinding` 为 opt-in（默认关闭），不应计入默认路径。
 

@@ -98,6 +98,20 @@ class UiScheduler(
         nanoTime: () -> Long,
     ) : this(driver, assertOwner, stateCapacity, commandCapacity, maxOperationsPerFrame, maxFrameWorkNanos, nanoTime, null)
 
+    /**
+     * A single queued command. Always created by the scheduler itself (never a caller object), so
+     * one instance is queued at most once and [queued] is an exact "still in a command queue"
+     * marker: it is cleared on every path that takes the entry out (apply, discard, clear).
+     *
+     * [discardInvalid] relies on it instead of `ArrayDeque.contains`, which was O(C) per stale
+     * command. Like the old `contains`, the flag is visible across nested scheduler calls made
+     * from a validator, so a reentrant `close()`/`pause()`/`discardInvalid()` that already took the
+     * entry out keeps the outer sweep from counting it twice.
+     */
+    private class CommandEntry(val isValid: () -> Boolean, val action: () -> Unit) {
+        var queued = true
+    }
+
     private class Batch(val operations: Array<ScheduledOperation?>) {
         var applied = 0
         var cursor = 0
@@ -237,8 +251,8 @@ class UiScheduler(
 
     private var states = linkedMapOf<Any, StateEntry>()
     private var driver: UiFrameDriver? = driver
-    // Command queue entries are either a single ScheduledOperation (submitCommand fast path,
-    // no Batch/array allocation) or a Batch (submitBatch).
+    // Command queue entries are either a single CommandEntry (submitCommand fast path, no
+    // Batch/array allocation) or a Batch (submitBatch).
     private var commands = ArrayDeque<Any>()
     private var frameStates: LinkedHashMap<Any, StateEntry>? = null
     private var frameCommands: ArrayDeque<Any>? = null
@@ -255,7 +269,7 @@ class UiScheduler(
     // (submitState/submitCommand/applyState) completely lock-free.
     private val handoffLock = Any()
     private val handoffStates = linkedMapOf<Any, StateEntry>()
-    private val handoffCommands = ArrayDeque<ScheduledOperation>()
+    private val handoffCommands = ArrayDeque<CommandEntry>()
 
     // Producer-side counters, guarded by `handoffLock` and folded into the owner-side counters on
     // the owner thread. Keeping them separate is what lets the owner fast path stay lock-free while
@@ -275,6 +289,12 @@ class UiScheduler(
     private var frameIdentity = 0L
     private var frameSequence = 0L
     private var requestingFrame = false
+    /**
+     * Number of [discardInvalid] command sweeps on the stack. While non-zero the command deques may
+     * still hold released entries awaiting compaction; [drain] compacts before snapshotting so a
+     * frame delivered from inside a validator never sees them.
+     */
+    private var commandSweeps = 0
     private var draining = false
     private var preferState = true
     private var accepted = 0L
@@ -448,7 +468,7 @@ class UiScheduler(
             if (handoffCommands.size >= commandCapacity) {
                 return handoffReject(RejectionReason.COMMAND_CAPACITY)
             }
-            handoffCommands.addLast(ScheduledOperation("command", isValid, action))
+            handoffCommands.addLast(CommandEntry(isValid, action))
             handoffAccepted++
         }
         if (!scheduleHandoffDispatch(dispatcher)) {
@@ -576,7 +596,7 @@ class UiScheduler(
     /** Owner-thread counterpart of [enqueueState]; null means the command queue is full. */
     private fun enqueueCommand(isValid: () -> Boolean, action: () -> Unit): SubmitResult? {
         if (pendingCommands >= commandCapacity) return null
-        return enqueue(ScheduledOperation("command", isValid, action))
+        return enqueue(CommandEntry(isValid, action))
     }
 
     /** Entire batch admission is atomic; applying the admitted batch is deliberately not a transaction. */
@@ -658,35 +678,59 @@ class UiScheduler(
                 }
             }
         }
-        for (queue in listOfNotNull(commands, frameCommands)) {
-            for (entry in queue.toList()) {
-                if (entry is Batch) {
-                    for (index in entry.cursor until entry.operations.size) {
+        // Stale commands are released logically (CommandEntry.queued / Batch slot nulled) and the
+        // queues are compacted once at the end, so C stale commands cost O(C) instead of the O(C^2)
+        // of a linear ArrayDeque.contains/remove per entry. A nested call compacts too; this outer
+        // sweep iterates its own snapshot, so that never disturbs it.
+        var removedCommand = false
+        commandSweeps++
+        try {
+            for (queue in listOfNotNull(commands, frameCommands)) {
+                // Snapshot only entries still queued: the legacy sweep copied the deque after
+                // enclosing sweeps had physically removed their stale entries, so a released entry
+                // awaiting compaction must not have its validator run again. Released entries can
+                // only exist while an enclosing sweep is on the stack (every sweep compacts on
+                // exit), so the outermost sweep keeps the plain array copy.
+                val snapshot = if (commandSweeps > 1) liveSnapshot(queue) else queue.toList()
+                for (entry in snapshot) {
+                    if (entry is Batch) {
+                        for (index in entry.cursor until entry.operations.size) {
+                            if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
+                            val operation = entry.operations[index] ?: continue
+                            val valid = checkPending(operation.label, operation.isValid, index, entry.applied) ?: return
+                            // A batch leaves a queue only once every slot is null (applied, discarded
+                            // or cleared), so the slot identity check alone says "still queued".
+                            if (!valid && entry.operations[index] === operation) {
+                                entry.remove(index)
+                                pendingCommands--
+                                removedAny = true
+                                removedCommand = true
+                                stale++
+                                released++
+                            }
+                        }
+                        if (entry.remaining == 0) removedCommand = true
+                    } else {
                         if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
-                        val operation = entry.operations[index] ?: continue
-                        val valid = checkPending(operation.label, operation.isValid, index, entry.applied) ?: return
-                        if (!valid && queue.contains(entry) && entry.operations[index] === operation) {
-                            entry.remove(index)
+                        val command = entry as? CommandEntry
+                            ?: error("unexpected command entry: ${entry::class.java.name}")
+                        val valid = checkPending("command", command.isValid, 0, 0) ?: return
+                        if (!valid && command.queued) {
+                            command.queued = false
                             pendingCommands--
                             removedAny = true
+                            removedCommand = true
                             stale++
                             released++
                         }
                     }
-                    if (entry.remaining == 0) queue.remove(entry)
-                } else {
-                    if (state == SchedulerState.CLOSED || state == SchedulerState.FAULTED) return
-                    val operation = entry as? ScheduledOperation
-                        ?: error("unexpected command entry: ${entry::class.java.name}")
-                    val valid = checkPending(operation.label, operation.isValid, 0, 0) ?: return
-                    if (!valid && queue.contains(entry)) {
-                        queue.remove(entry)
-                        pendingCommands--
-                        removedAny = true
-                        stale++
-                        released++
-                    }
                 }
+            }
+        } finally {
+            commandSweeps--
+            if (removedCommand) {
+                compactCommands(commands)
+                frameCommands?.let(::compactCommands)
             }
         }
         // Group order only goes stale when a group loses its last slot. A pure rescan (the common
@@ -705,6 +749,22 @@ class UiScheduler(
         fault(label, index, appliedInBatch, "validation", error)
         if (error is Error) throw error
         null
+    }
+
+    /** Exactly-sized copy of the entries still queued (same cost as the former `toList()`). */
+    private fun liveSnapshot(queue: ArrayDeque<Any>): ArrayList<Any> {
+        val snapshot = ArrayList<Any>(queue.size)
+        for (entry in queue) if (entry is Batch || (entry as CommandEntry).queued) snapshot.add(entry)
+        return snapshot
+    }
+
+    /** One O(n) pass that physically drops released commands and emptied batches, keeping order. */
+    private fun compactCommands(queue: ArrayDeque<Any>) {
+        repeat(queue.size) {
+            val entry = queue.pollFirst()
+            val live = if (entry is Batch) entry.remaining > 0 else (entry as CommandEntry).queued
+            if (live) queue.addLast(entry)
+        }
     }
 
     override fun close() {
@@ -730,8 +790,10 @@ class UiScheduler(
     }
 
     private fun requestIfNeeded() {
+        // pendingCommands rather than commands.isEmpty(): outside a drain they agree, except that a
+        // discardInvalid sweep may still hold released entries awaiting compaction.
         if (state != SchedulerState.ACTIVE || draining || frameIdentity != 0L ||
-            (states.isEmpty() && commands.isEmpty())) return
+            (states.isEmpty() && pendingCommands == 0)) return
         // A monotonically increasing serial avoids allocating an identity object per frame.
         val identity = ++frameSequence
         frameIdentity = identity
@@ -761,6 +823,7 @@ class UiScheduler(
         mergeHandoff()
         draining = true
         drained++
+        if (commandSweeps > 0) compactCommands(commands)
         frameStates = states
         frameCommands = commands
         // A command-only frame has no snapshot to index; skip the state index entirely.
@@ -976,11 +1039,12 @@ class UiScheduler(
             if (entry.remaining == 0) queue.removeFirst()
             if (apply(operation.label, operation.isValid, operation.action, index, entry.applied)) entry.applied++
         } else {
-            val operation = entry as? ScheduledOperation
+            val command = entry as? CommandEntry
                 ?: error("unexpected command entry: ${entry::class.java.name}")
             queue.removeFirst()
+            command.queued = false
             pendingCommands--
-            apply(operation.label, operation.isValid, operation.action, 0, 0)
+            apply("command", command.isValid, command.action, 0, 0)
         }
     }
 
@@ -1024,14 +1088,18 @@ class UiScheduler(
         }
     }
 
+    private fun releaseCommand(entry: Any) {
+        if (entry is Batch) entry.clear() else (entry as CommandEntry).queued = false
+    }
+
     private fun clearQueues() {
         released += states.size + (frameStates?.size ?: 0) + pendingCommands
         dropHandoff()
         states.clear()
-        commands.forEach { if (it is Batch) it.clear() }
+        commands.forEach(::releaseCommand)
         commands.clear()
         frameStates?.clear()
-        frameCommands?.forEach { if (it is Batch) it.clear() }
+        frameCommands?.forEach(::releaseCommand)
         frameCommands?.clear()
         frameGroups?.clear()
         frameIndex = null
@@ -1040,7 +1108,7 @@ class UiScheduler(
         pendingCommands = 0
         spareStates?.clear()
         spareStates = null
-        spareCommands?.forEach { if (it is Batch) it.clear() }
+        spareCommands?.forEach(::releaseCommand)
         spareCommands?.clear()
         spareCommands = null
         spareIndex = null
