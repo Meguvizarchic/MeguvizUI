@@ -2,7 +2,7 @@
 
 ## 职责边界
 
-`ViewRestoration` 只负责**表现层**状态：焦点、选择、滚动。业务模型（计数、草稿等）由应用自己保存；**文本永远不从 UI 快照恢复**（源码注释：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/state/ViewRestoration.kt:52`）。
+`ViewRestoration` 只负责**表现层**状态：焦点、选择、滚动。业务模型（计数、草稿等）由应用自己保存；**文本永远不从 UI 快照恢复**（源码注释：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/state/ViewRestoration.kt`）。
 
 正确顺序是：
 
@@ -104,12 +104,12 @@ class MainActivity : Activity() {
 
 | 方法 | 作用 | 源码 |
 | --- | --- | --- |
-| `ViewRestoration(session, restored = null)` | 创建；内部用 `session.onClose { close() }` 自动关闭 | `ViewRestoration.kt:53-60` |
-| `register(path, ref, root)` | 登记 path 与 `ViewRef`，并分配稳定 id | `ViewRestoration.kt:65-79` |
-| `restoreAfterLayout(root)` | 注册全局布局监听，布局后恢复滚动/选择/焦点 | `ViewRestoration.kt:90-124` |
-| `snapshot()` | 采集当前表现状态 | `ViewRestoration.kt:81-88` |
-| `userInteracted()` | 记录用户已交互，撤销待恢复 | `ViewRestoration.kt:63` |
-| `RestorationSnapshot.toBundle()` / `fromBundle(bundle)` | 纯数据序列化；schema 当前为 1 | `ViewRestoration.kt:18-49` |
+| `ViewRestoration(session, restored = null)` | 创建；内部用 `session.onClose { close() }` 自动关闭 | `ViewRestoration.kt` |
+| `register(path, ref, root)` | 登记 path 与 `ViewRef`，并分配稳定 id | `ViewRestoration.kt` |
+| `restoreAfterLayout(root)` | 注册全局布局监听，布局后恢复滚动/选择/焦点 | `ViewRestoration.kt` |
+| `snapshot()` | 采集当前表现状态 | `ViewRestoration.kt` |
+| `userInteracted()` | 记录用户已交互，撤销待恢复 | `ViewRestoration.kt` |
+| `RestorationSnapshot.toBundle()` / `fromBundle(bundle)` | 纯数据序列化；schema 当前为 1 | `ViewRestoration.kt` |
 
 注意：
 

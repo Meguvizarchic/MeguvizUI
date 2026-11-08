@@ -11,7 +11,7 @@
 
 ## 常用属性：优先复用 `Properties`
 
-源码：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Properties.kt:10-43`。
+源码：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Properties.kt`。
 
 | 方法 | 类型 | 适用场景 |
 | --- | --- | --- |
@@ -28,7 +28,7 @@ val binding = session.bind(title, Properties.plainText())
 val result: SubmitResult = binding.submit("Updated")
 ```
 
-`title.bind(Properties.plainText())` 是等价简写（`Identity.kt:89`）。
+`title.bind(Properties.plainText())` 是等价简写（`Identity.kt`）。
 
 ## 处理 `SubmitResult`
 
@@ -40,11 +40,11 @@ when (val result = binding.submit("Ready")) {
 }
 ```
 
-`RejectionReason` 取值：`PAUSED`、`FAULTED`、`CLOSED`、`STATE_CAPACITY`、`COMMAND_CAPACITY`、`EMPTY_BATCH`（源码：`ui-core/.../scheduler/UiScheduler.kt:7`）。不要忽略拒绝：容量、暂停和关闭都会拒绝。
+`RejectionReason` 取值：`PAUSED`、`FAULTED`、`CLOSED`、`STATE_CAPACITY`、`COMMAND_CAPACITY`、`EMPTY_BATCH`（源码：`ui-core/.../scheduler/UiScheduler.kt`）。不要忽略拒绝：容量、暂停和关闭都会拒绝。
 
 ## 自定义 `PropertySpec`
 
-字段（源码：`ui-core/.../Properties.kt:23-39`）：
+字段（源码：`ui-core/.../Properties.kt`）：
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ val counterBinding = session.bind(title, spec)
 counterBinding.submit("Count: 1")
 ```
 
-`binding` 还暴露 `operation(value)`（生成 `ScheduledOperation` 供批次使用）、`invalidate()`、`close()`，以及诊断计数 `writes` / `skips`（源码：`ui-core/.../Properties.kt:41-116`）。
+`binding` 还暴露 `operation(value)`（生成 `ScheduledOperation` 供批次使用）、`invalidate()`、`close()`，以及诊断计数 `writes` / `skips`（源码：`ui-core/.../Properties.kt`）。
 
 ## 命令：点击与一次性操作
 
@@ -83,7 +83,7 @@ val clickLease = session.click(button) { view ->
 // 不再需要时：clickLease.close()
 ```
 
-`session.click` 会保留 `event:click` 属性槽，返回 `AutoCloseable`；外部代码若替换 listener，必须先关闭该句柄（源码：`UiSession.kt:199-210`）。
+`session.click` 会保留 `event:click` 属性槽，返回 `AutoCloseable`；外部代码若替换 listener，必须先关闭该句柄（源码：`UiSession.kt`）。
 
 ## 直接使用 `UiScheduler`
 
@@ -119,9 +119,9 @@ session.scheduler.submitBatch(
 
 `StateSlot` / `StateUpdate` / `ScheduledOperation` 都在 `io.github.jichuo1.meguviz.ui.scheduler` 包下。
 
-- `ScheduledOperation(label, isValid, action)`（源码：`ui-core/.../scheduler/UiScheduler.kt:19-23`）。
-- `StateUpdate(slot, isValid, action)`（源码：`ui-core/.../scheduler/StateUpdate.kt:9-13`）。
-- `StateSlot(binding, property)` 把同一绑定的多个属性归入一个公平组（源码：`UiScheduler.kt:10`）。
+- `ScheduledOperation(label, isValid, action)`（源码：`ui-core/.../scheduler/UiScheduler.kt`）。
+- `StateUpdate(slot, isValid, action)`（源码：`ui-core/.../scheduler/StateUpdate.kt`）。
+- `StateSlot(binding, property)` 把同一绑定的多个属性归入一个公平组（源码：`UiScheduler.kt`）。
 - 已发布 `1.0.0` 的批次入口是 `submitBatch(List<ScheduledOperation>)`；`submitBatch(vararg ...)` 便利重载属于当前源码候选（`1.2.0`），消费 `1.0.0` 时请用 `listOf(...)` 形式（见 [核心合同](../contracts.md)）。
 - 批次整体准入或拒绝；应用过程**不是事务**，失败前的副作用可能已经发生。
 
@@ -135,7 +135,7 @@ val pendingStates = session.scheduler.pendingStateCount
 val pendingCommands = session.scheduler.pendingCommandCount
 ```
 
-`UiScheduler` 构造参数（源码默认值，`UiScheduler.kt:49-57`）：`stateCapacity = 256`、`commandCapacity = 256`、`maxOperationsPerFrame = 64`、`maxFrameWorkNanos = 2_000_000`。普通会话用默认值即可；自定义驱动/容量前请先读 [调度与帧所有权](../scheduling.md)。
+`UiScheduler` 构造参数（源码默认值，`UiScheduler.kt`）：`stateCapacity = 256`、`commandCapacity = 256`、`maxOperationsPerFrame = 64`、`maxFrameWorkNanos = 2_000_000`。普通会话用默认值即可；自定义驱动/容量前请先读 [调度与帧所有权](../scheduling.md)。
 
 ## 常见报错
 

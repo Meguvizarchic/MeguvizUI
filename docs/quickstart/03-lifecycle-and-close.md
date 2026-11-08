@@ -8,7 +8,7 @@
 java.lang.IllegalStateException: UI operation requires the main thread
 ```
 
-源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/UiSession.kt:59`。
+源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/UiSession.kt`。
 
 纯模型计算与不可变数据可以放后台，但**不能**据此推断任意 View 可以异步构造（见 [生命周期与失败恢复](../lifecycle.md)）。
 
@@ -33,7 +33,7 @@ val request: CloseRequest = session.requestClose()
 // request.failure：清理过程中的首个失败（可能为 null）
 ```
 
-`requestClose()` 返回的 `CloseRequest` 立即表示「已受理」，`completed` 才表示 owner 清理完成（源码：`UiSession.kt:261-269`）。如果 owner looper 拒绝投递，会记录 `IllegalStateException("Owner looper rejected close")`。
+`requestClose()` 返回的 `CloseRequest` 立即表示「已受理」，`completed` 才表示 owner 清理完成（源码：`UiSession.kt`）。如果 owner looper 拒绝投递，会记录 `IllegalStateException("Owner looper rejected close")`。
 
 ## detach / reattach
 
@@ -45,7 +45,7 @@ session.detach()    // 旧 attach token 失效；scheduler 进入 PAUSED
 session.reattach()  // scheduler 恢复 ACTIVE
 ```
 
-`detach()` 不会自动清除 scheduler 的 FAULTED；`reattach()` 只恢复 PAUSED（源码：`UiSession.kt:219-224`）。Android 桥会配对安装 `OnAttachStateChangeListener` 自动转发这两个调用，见 [可选桥](../bridges.md)。
+`detach()` 不会自动清除 scheduler 的 FAULTED；`reattach()` 只恢复 PAUSED（源码：`UiSession.kt`）。Android 桥会配对安装 `OnAttachStateChangeListener` 自动转发这两个调用，见 [可选桥](../bridges.md)。
 
 ## rebind 与 release
 
@@ -60,7 +60,7 @@ session.release(titleRef)  // 释放该节点及其子树
 java.lang.IllegalStateException: View reference released
 ```
 
-源码：`UiSession.kt:152-156`、`212-217`、`228-258`。
+源码：`UiSession.kt`、`212-217`、`228-258`。
 
 ## 外部资源的配对清理
 
@@ -74,7 +74,7 @@ session.onRelease(title) { nativeTitle.removeTextChangedListener(watcher) }
 session.onClose { /* 会话级清理 */ }
 ```
 
-`onRelease` / `onClose` 的清理闭包应捕获所需原生 View，避免在引用释放后重新解析（源码：`UiSession.kt:195-196`）。
+`onRelease` / `onClose` 的清理闭包应捕获所需原生 View，避免在引用释放后重新解析（源码：`UiSession.kt`）。
 
 ## 保留视觉属性
 
@@ -86,11 +86,11 @@ val lease = session.reserveProperties(titleRef, setOf("background"))
 lease.close()   // 释放保留
 ```
 
-未保留就绑定同 id 属性会抛 `IllegalStateException("Conflicting visual property owner")`（源码：`UiSession.kt:184-193`）。
+未保留就绑定同 id 属性会抛 `IllegalStateException("Conflicting visual property owner")`（源码：`UiSession.kt`）。
 
 ## 调度器状态
 
-`session.scheduler.state` 取值（源码：`ui-core/.../scheduler/UiScheduler.kt:5`）：
+`session.scheduler.state` 取值（源码：`ui-core/.../scheduler/UiScheduler.kt`）：
 
 | 状态 | 含义 |
 | --- | --- |
@@ -99,7 +99,7 @@ lease.close()   // 释放保留
 | `FAULTED` | 验证或 action 抛异常；队列已清空 |
 | `CLOSED` | 会话关闭 |
 
-`pause()` 默认清空队列；`pause(clearPending = false)` 才保留队列。`resume()` 只恢复 PAUSED，`recover()` 只恢复 FAULTED，且要求调用者先核对/重建真实状态（源码：`UiScheduler.kt:363-384`）。诊断信息在 `session.scheduler.failure`（`SchedulerFailure`）与 `cancellationFailure`。
+`pause()` 默认清空队列；`pause(clearPending = false)` 才保留队列。`resume()` 只恢复 PAUSED，`recover()` 只恢复 FAULTED，且要求调用者先核对/重建真实状态（源码：`UiScheduler.kt`）。诊断信息在 `session.scheduler.failure`（`SchedulerFailure`）与 `cancellationFailure`。
 
 ## 常见报错
 

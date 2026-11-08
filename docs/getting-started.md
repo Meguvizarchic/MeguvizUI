@@ -86,15 +86,15 @@ class MainActivity : Activity() {
 
 ## 三条关键约定
 
-1. **主线程独占**：`UiSession` 的构造、挂载、属性提交、释放和 `close()` 都必须在 Android 主线程调用，否则抛 `IllegalStateException("UI operation requires the main thread")`（源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/UiSession.kt:59`）。纯模型计算可以放后台，但不能据此推断 View 可以异步构造。
-2. **`session.close()` 必须调用**：在 Activity/窗口所有者销毁时调用，否则绑定、监听和受管子树不会被释放。后台可以用 `session.requestClose()` 发起，返回的 `CloseRequest.completed` 表示 owner 已实际清理完成（源码：`UiSession.kt:261-269`）。
-3. **状态保存/恢复交给 `ViewRestoration`**：它负责焦点、选择与滚动；业务模型（计数、草稿等）由应用自己保存，不要从 UI 快照里恢复文本（源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/state/ViewRestoration.kt:52`）。
+1. **主线程独占**：`UiSession` 的构造、挂载、属性提交、释放和 `close()` 都必须在 Android 主线程调用，否则抛 `IllegalStateException("UI operation requires the main thread")`（源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/UiSession.kt`）。纯模型计算可以放后台，但不能据此推断 View 可以异步构造。
+2. **`session.close()` 必须调用**：在 Activity/窗口所有者销毁时调用，否则绑定、监听和受管子树不会被释放。后台可以用 `session.requestClose()` 发起，返回的 `CloseRequest.completed` 表示 owner 已实际清理完成（源码：`UiSession.kt`）。
+3. **状态保存/恢复交给 `ViewRestoration`**：它负责焦点、选择与滚动；业务模型（计数、草稿等）由应用自己保存，不要从 UI 快照里恢复文本（源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/state/ViewRestoration.kt`）。
 
 ## 推荐写法说明
 
-- `ParentScope` 已经提供 `text` / `edit` / `button` / `image` / `linear` / `frame` 六个简洁方法（源码：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Widgets.kt:68-82`）。它们内部走 `session.mount`，是官方推荐的挂载方式；**不需要**再引入 `mountText` / `mountEdit` / `mountButton` 之类的冗余入口。
-- `ViewRef.bind(PropertySpec)` 已存在（源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Identity.kt:89`），是 `session.bind(ref, property)` 的纯委托简写，可直接链式调用。已发布 `1.0.0` 保证 `session.bind(ref, property)`；`ref.bind(...)` 属于当前源码候选（`1.2.0`），消费 `1.0.0` 时请用 `session.bind(...)`。
-- 常用属性优先复用 `Properties.plainText()` / `richText()` / `textColor()` / `visibility()` / `checked()`（源码：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Properties.kt:10-43`），不要一上来就手写 10 参数的 `PropertySpec`。
+- `ParentScope` 已经提供 `text` / `edit` / `button` / `image` / `linear` / `frame` 六个简洁方法（源码：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Widgets.kt`）。它们内部走 `session.mount`，是官方推荐的挂载方式；**不需要**再引入 `mountText` / `mountEdit` / `mountButton` 之类的冗余入口。
+- `ViewRef.bind(PropertySpec)` 已存在（源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Identity.kt`），是 `session.bind(ref, property)` 的纯委托简写，可直接链式调用。已发布 `1.0.0` 保证 `session.bind(ref, property)`；`ref.bind(...)` 属于当前源码候选（`1.2.0`），消费 `1.0.0` 时请用 `session.bind(...)`。
+- 常用属性优先复用 `Properties.plainText()` / `richText()` / `textColor()` / `visibility()` / `checked()`（源码：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Properties.kt`），不要一上来就手写 10 参数的 `PropertySpec`。
 
 ## 常见报错速查
 

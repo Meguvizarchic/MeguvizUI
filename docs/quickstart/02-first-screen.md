@@ -50,20 +50,20 @@ class MainActivity : Activity() {
 
 | 代码 | 作用 | 源码 |
 | --- | --- | --- |
-| `CreationEnvironment(this)` | 保留 Activity 的 themed Context，不换成 `applicationContext` | `ui-core/.../Identity.kt:49` |
-| `UiSession(environment)` | 创建会话；默认帧驱动是 `ChoreographerFrameDriver()` | `ui-core/.../UiSession.kt:23-26` |
-| `ViewKey("title")` | 父容器内的稳定 key，重复会拒绝 | `ui-core/.../Identity.kt:62` |
-| `FrameScope(session, root)` | 绑定 `FrameLayout` 父容器与 `FramePolicy` | `ui-widgets/.../Widgets.kt:86` |
-| `text(key, params) { ... }` | 挂载 `TextView`，返回 `ViewRef<TextView>` | `ui-widgets/.../Widgets.kt:68` |
-| `frameParams()` | 生成 `FrameLayout.LayoutParams`（默认 `MATCH_PARENT` × `WRAP_CONTENT`） | `ui-widgets/.../Widgets.kt:39` |
-| `title.bind(Properties.plainText())` | `session.bind(title, spec)` 的流式简写 | `ui-core/.../Identity.kt:89` |
-| `.submit("Updated")` | 提交一次状态；返回 `SubmitResult` | `ui-core/.../Properties.kt:57` |
+| `CreationEnvironment(this)` | 保留 Activity 的 themed Context，不换成 `applicationContext` | `ui-core/.../Identity.kt` |
+| `UiSession(environment)` | 创建会话；默认帧驱动是 `ChoreographerFrameDriver()` | `ui-core/.../UiSession.kt` |
+| `ViewKey("title")` | 父容器内的稳定 key，重复会拒绝 | `ui-core/.../Identity.kt` |
+| `FrameScope(session, root)` | 绑定 `FrameLayout` 父容器与 `FramePolicy` | `ui-widgets/.../Widgets.kt` |
+| `text(key, params) { ... }` | 挂载 `TextView`，返回 `ViewRef<TextView>` | `ui-widgets/.../Widgets.kt` |
+| `frameParams()` | 生成 `FrameLayout.LayoutParams`（默认 `MATCH_PARENT` × `WRAP_CONTENT`） | `ui-widgets/.../Widgets.kt` |
+| `title.bind(Properties.plainText())` | `session.bind(title, spec)` 的流式简写 | `ui-core/.../Identity.kt` |
+| `.submit("Updated")` | 提交一次状态；返回 `SubmitResult` | `ui-core/.../Properties.kt` |
 
-`Properties.plainText()` 只适合**没有编辑协议副作用的不可变标签**（源码注释：`ui-widgets/.../Properties.kt:11-18`）。输入框、IME、过滤器请交给业务控制器。
+`Properties.plainText()` 只适合**没有编辑协议副作用的不可变标签**（源码注释：`ui-widgets/.../Properties.kt`）。输入框、IME、过滤器请交给业务控制器。
 
 ## 推荐写法：作用域 DSL
 
-`ParentScope` 已经提供六个简洁方法，内部统一走 `session.mount`，**这就是推荐写法**（源码：`ui-widgets/.../Widgets.kt:65-82`）：
+`ParentScope` 已经提供六个简洁方法，内部统一走 `session.mount`，**这就是推荐写法**（源码：`ui-widgets/.../Widgets.kt`）：
 
 | 方法 | 挂载类型 | 说明 |
 | --- | --- | --- |
@@ -104,7 +104,7 @@ val label = FrameScope(session, root).view(
 ) { text = "Custom" }
 ```
 
-预置工厂见 `Framework`（`ui-widgets/.../Widgets.kt:41-56`）：`textFactory` / `editFactory` / `buttonFactory` / `imageFactory` / `linearFactory` / `frameFactory` / `scrollFactory`。Framework、AppCompat、Material 控件**不能按名称互换**，必须使用各自准确的直接工厂（见 [安装与接入](../installation.md)）。
+预置工厂见 `Framework`（`ui-widgets/.../Widgets.kt`）：`textFactory` / `editFactory` / `buttonFactory` / `imageFactory` / `linearFactory` / `frameFactory` / `scrollFactory`。Framework、AppCompat、Material 控件**不能按名称互换**，必须使用各自准确的直接工厂（见 [安装与接入](../installation.md)）。
 
 ## 尺寸值
 
@@ -113,7 +113,7 @@ val padding = Dp(24f).pixels(context)   // Int，随 displayMetrics 换算
 val textSize = Sp(16f).pixels(context)  // Float
 ```
 
-源码：`ui-widgets/.../Widgets.kt:27-32`。
+源码：`ui-widgets/.../Widgets.kt`。
 
 ## 常见报错
 

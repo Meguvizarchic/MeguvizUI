@@ -43,7 +43,7 @@ PrecomputedTextBinding(session, ref, background, onFailure, enabled = false, min
 ```
 
 - 默认 `enabled = false`；只有显式启用且满足以下全部条件才走系统 `PrecomputedText`：API 28+、纯 `String`、长度 ≥ `minimumLength`、非 `EditText`、无 filters。
-- 不满足条件时 `submit` 返回 `false`，并改用普通 setter：纯 `String` 走 `Properties.plainText()` 的状态通道（可合并），其他 `CharSequence` 走命令通道（`PrecomputedTextBinding.kt:91-92`）。
+- 不满足条件时 `submit` 返回 `false`，并改用普通 setter：纯 `String` 走 `Properties.plainText()` 的状态通道（可合并），其他 `CharSequence` 走命令通道（`PrecomputedTextBinding.kt`）。
 - 后台预计算结果通过主线程 `Handler` 投递；参数在提交后变化时最多重算两次，之后回退普通 setter。
 - 外部字体/主题原位变更时，调用方必须先调用 `invalidate()` 或相应资源权威失效方法。
 - 收益只针对主线程部分；后台计算使结果更晚可应用（具体延迟见准入记录）。
@@ -77,7 +77,7 @@ UiPrewarmer.attach(session, capacity = 4, maxUnitsPerWork = 32, maxUnitNanos = 2
 
 ## 2. UiScheduler 参数取值建议
 
-构造函数（`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/UiScheduler.kt:49-57`）：
+构造函数（`UiScheduler`）：
 
 ```kotlin
 class UiScheduler(
@@ -106,7 +106,7 @@ class UiScheduler(
 
 - 同槽重提是合并（`SubmitResult.Coalesced`），不新增容量；只有新槽才可能触发 `Rejected(STATE_CAPACITY)`。
 - 容量计算包含当前帧尚未处理的集合（`pendingStateCount`）。
-- **关键区分**：`PropertyBinding.submit` 根据 `PropertySpec.coalescible` 选择通道（`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Properties.kt:57-67`）：
+- **关键区分**：`PropertyBinding.submit` 根据 `PropertySpec.coalescible` 选择通道（`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Properties.kt`）：
   - `coalescible = true` → `submitState`，受 `stateCapacity` 约束。`Properties.plainText()` / `textColor()` / `visibility()` 属于此类。
   - `coalescible = false`（默认）→ `submitCommand`，受 `commandCapacity` 约束。`Properties.richText()` / `checked()` 属于此类。
 - 因此，走哪个通道取决于 `PropertySpec.coalescible`；`stateCapacity` 主要影响 coalescible 属性与直接使用 `UiScheduler.submitState` / `submitStates` 的场景。
@@ -114,25 +114,25 @@ class UiScheduler(
 
 ### 2.2 commandCapacity
 
-- 单操作命令直接入队；批次整体准入：`operations.size > commandCapacity - pendingCommands` 时整批拒绝（`UiScheduler.kt:335-341`）。
+- 单操作命令直接入队；批次整体准入：`operations.size > commandCapacity - pendingCommands` 时整批拒绝（`UiScheduler`）。
 - 批次整体接收或拒绝，但批次内部操作保持 FIFO；批次**不是事务**，不提供回滚。
 - **建议**：默认 256。按单帧峰值命令操作数（含批次展开）估算，至少覆盖一次完整页面更新。
 
 ### 2.3 maxOperationsPerFrame
 
-- 每帧最多执行的操作数；达到上限后剩余工作合并回队列，下一帧继续（`UiScheduler.kt:539-549`、`550-575`）。
+- 每帧最多执行的操作数；达到上限后剩余工作合并回队列，下一帧继续（`UiScheduler`、`550-575`）。
 - **建议**：默认 64。若单帧预算内可完成更多操作且希望减少帧数，可上调；若单帧操作耗时波动大，保持或下调。
 
 ### 2.4 maxFrameWorkNanos
 
-- 固定工作预算。当平台提供真实 deadline（`estimated = false`）时，有效预算取 `min(maxFrameWorkNanos, deadline - started - 1ms)`；`estimated = true`（deadline 未知或仅估计）时只用固定预算（`UiScheduler.kt:530-536`）。
+- 固定工作预算。当平台提供真实 deadline（`estimated = false`）时，有效预算取 `min(maxFrameWorkNanos, deadline - started - 1ms)`；`estimated = true`（deadline 未知或仅估计）时只用固定预算（`UiScheduler`）。
 - 代码中 `reservedTailNanos = 1_000_000L`，为 traversal/draw 预留 1ms 尾部。
 - `deadline - started <= 1ms` 时派生预算为 0，该帧不执行任何操作。
 - **建议**：默认 2ms。API 33+ 有真实 deadline 时预算会被 soft deadline 自动收紧；API ≤32 只用固定预算。共享帧多 session 场景必须按 `N × maxFrameWorkNanos` 折算（见 1.4）。
 
 ### 2.5 帧预算与 deadline
 
-`FrameBudget`（`ui-core/.../scheduler/UiFrameDriver.kt:13-26`）：
+`FrameBudget`（`ui-core/.../scheduler/UiFrameDriver.kt`）：
 
 ```kotlin
 data class FrameBudget(
@@ -152,11 +152,11 @@ data class FrameBudget(
 
 ## 3. 后台线程与主线程投递边界
 
-- `UiSession` / `UiScheduler` 的所有方法与帧回调都必须在 owner 线程执行；`UiSession.assertOwner()` 失败抛 `IllegalStateException("UI operation requires the main thread")`（`ui-core/.../UiSession.kt:59`）。
-- **唯一例外**：`UiSession.requestClose()` 可从后台线程调用，内部 post 到主线程执行 `close()`（`UiSession.kt:261-269`）。`close()` 本身仍要求主线程。
+- `UiSession` / `UiScheduler` 的所有方法与帧回调都必须在 owner 线程执行；`UiSession.assertOwner()` 失败抛 `IllegalStateException("UI operation requires the main thread")`（`ui-core/.../UiSession.kt`）。
+- **唯一例外**：`UiSession.requestClose()` 可从后台线程调用，内部 post 到主线程执行 `close()`（`UiSession.kt`）。`close()` 本身仍要求主线程。
 - 以下入口全部要求主线程：`PropertyBinding.submit` / `operation`、`UiScheduler.submitState` / `submitStates` / `submitCommand` / `submitBatch` / `discardInvalid` / `pause` / `resume` / `recover` / `close`。跨线程请改用下面这两个异步入口。
 - 跨线程提交用 `submitStateAsync` / `submitCommandAsync`（`UiScheduler` 与 `UiSession` 都有）：后台线程只写入有界 handoff，一次 owner 派发服务整批更新，同槽更新在合并前就已塌缩成一条。详见[调度指南](../guides/scheduler.md#跨线程提交异步入口)。注意不同槽位的突发会比同步路径多一倍 map 操作（handoff 插入 + 合并插入），收益是 owner 派发次数，不是分配。
-- P2 模块的 `background: Executor` 必须真正异步：`LatestWork` / `LatestTextWork` 会检查后台线程是否为 owner 线程，若是则抛 `IllegalStateException("Background executor must run off the owner thread")`，并可能关闭控制器（`ui-recycler/.../LatestWork.kt:43-49`、`ui-text/.../LatestTextWork.kt:55-62`）。
+- P2 模块的 `background: Executor` 必须真正异步：`LatestWork` / `LatestTextWork` 会检查后台线程是否为 owner 线程，若是则抛 `IllegalStateException("Background executor must run off the owner thread")`，并可能关闭控制器（`ui-recycler/.../LatestWork.kt`、`ui-text/.../LatestTextWork.kt`）。
 - owner 派发必须在主线程：`PrecomputedTextBinding` 与 `UiListAdapter` 内部用 `Handler(Looper.getMainLooper())` 投递结果。
 - `UiPrewarmer` 在 scheduler owner（主线程）执行，每帧最多一个单元；普通 `View` 构造不能放后台，后台只准备调用方自有的纯模型。
 
@@ -166,7 +166,7 @@ data class FrameBudget(
 
 ### 4.1 SubmitResult 与 RejectionReason
 
-`UiScheduler` 的返回类型（`UiScheduler.kt:5-16`）：
+`UiScheduler` 的返回类型（`UiScheduler`）：
 
 - `SubmitResult.Accepted`：新槽/新命令入队。
 - `SubmitResult.Coalesced`：状态槽已排队，本次覆盖旧值。
@@ -195,14 +195,14 @@ data class FrameBudget(
 
 ### 4.4 观测
 
-- `SchedulerCounters` 区分接收、合并、实际 action、过期、引用释放、拒绝、帧请求与帧执行（`UiScheduler.kt:34-43`）。`action` 次数不等同于原生 setter 接受次数或 traversal 次数。
+- `SchedulerCounters` 区分接收、合并、实际 action、过期、引用释放、拒绝、帧请求与帧执行（`UiScheduler`）。`action` 次数不等同于原生 setter 接受次数或 traversal 次数。
 - 排查背压时先看 `Rejected` 计数与 `RejectionReason`，再决定是扩容、合并提交还是降低提交频率。
 
 ---
 
 ## 5. 同语义集合 submitStates 的适用场景
 
-入口：`UiScheduler.submitStates(updates: List<StateUpdate>)`、`StateUpdate(slot, isValid, action)`（`ui-core/.../scheduler/UiScheduler.kt:287-325`、`StateUpdate.kt`）。
+入口：`UiScheduler.submitStates(updates: List<StateUpdate>)`、`StateUpdate(slot, isValid, action)`（`ui-core/.../scheduler/UiScheduler.kt`、同目录 `StateUpdate.kt`）。
 
 语义：
 
