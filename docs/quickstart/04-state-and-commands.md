@@ -135,7 +135,7 @@ val pendingStates = session.scheduler.pendingStateCount
 val pendingCommands = session.scheduler.pendingCommandCount
 ```
 
-`UiScheduler` 构造参数（源码默认值，`UiScheduler.kt`）：`stateCapacity = 256`、`commandCapacity = 256`、`maxOperationsPerFrame = 64`、`maxFrameWorkNanos = 2_000_000`。普通会话用默认值即可；自定义驱动/容量前请先读 [调度与帧所有权](../scheduling.md)。
+`UiScheduler` 构造参数（源码默认值，`UiScheduler.kt`）：`stateCapacity = 256`、`commandCapacity = 256`、`maxOperationsPerFrame = 64`、`maxFrameWorkNanos = 2_000_000`。普通会话用默认值即可；自定义驱动/容量前请先读 [调度与帧所有权](../guides/scheduler.md)。
 
 ## 常见报错
 

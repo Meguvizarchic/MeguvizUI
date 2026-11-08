@@ -52,7 +52,7 @@
 - 计量前先运行语义检查：命令 FIFO 与合并、重入提交下一帧可见、分组轮转、故障恢复、`close()` 清空队列。
 - 分别计时「提交 + drain」与「仅 drain」；部分 drain 场景用 `size/2` 作为操作上限；`state-batch` 的 `StateUpdate` 构造成本计入测量，因此不与逐次 `submitState` 直接比较。
 - 默认 warmup 2000 / iterations 4000。
-- 完整数据表与口径说明记录在 [docs/development.md](../development.md) 与 [docs/scheduling.md](../scheduling.md)。
+- 完整数据表与口径说明记录在 [docs/development.md](../development.md) 与 [docs/scheduling.md](../guides/scheduler.md)。
 
 ### 2.4 LatestWorkProbe
 

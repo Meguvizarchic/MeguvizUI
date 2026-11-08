@@ -721,6 +721,6 @@
 ## 相关文档
 
 - [故障排查 FAQ](faq.md)
-- [核心合同](../contracts.md)、[调度与帧所有权](../scheduling.md)、[生命周期与失败恢复](../lifecycle.md)
+- [核心合同](../contracts.md)、[调度与帧所有权](../guides/scheduler.md)、[生命周期与失败恢复](../quickstart/03-lifecycle-and-close.md)
 - [属性绑定与 PropertySpec](../guides/properties.md)、[调度器、帧驱动与背压](../guides/scheduler.md)
 - [状态保存与恢复](../quickstart/05-restoration.md)、[可选桥](../bridges.md)

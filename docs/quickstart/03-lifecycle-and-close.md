@@ -10,7 +10,7 @@ java.lang.IllegalStateException: UI operation requires the main thread
 
 源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/UiSession.kt`。
 
-纯模型计算与不可变数据可以放后台，但**不能**据此推断任意 View 可以异步构造（见 [生命周期与失败恢复](../lifecycle.md)）。
+纯模型计算与不可变数据可以放后台，但**不能**据此推断任意 View 可以异步构造（见 [调度与帧所有权 / 失败恢复](../guides/scheduler.md)）。
 
 ## 在 `onDestroy` 关闭
 

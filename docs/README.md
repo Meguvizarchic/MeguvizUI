@@ -23,7 +23,7 @@
 | [属性](guides/properties.md) | `PropertySpec` 字段、`PropertyOwnership`、现有 `Properties` 的适用场景 |
 | [调度](guides/scheduler.md) | `UiScheduler` / `UiFrameDriver` / `FrameBudget` / 容量与背压 |
 | [核心合同](contracts.md) | 类型、属性、更新、生命周期与恢复（完整合同） |
-| [属性与更新语义](property-semantics.md) | 属性 ownership、读回与失效语义 |
+| [属性与更新语义](guides/properties.md) | 属性 ownership、读回与失效语义 |
 | [安装与接入](installation.md) | 工具链、本地 Maven、普通应用与示例 |
 
 ### 桥接

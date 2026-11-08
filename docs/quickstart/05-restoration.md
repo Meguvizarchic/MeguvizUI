@@ -133,4 +133,4 @@ class MainActivity : Activity() {
 ## 下一步
 
 - [示例索引](../examples.md)：`samples/standalone` 是这份代码的完整可运行版本。
-- [核心合同](../contracts.md) · [状态与编解码](../state-codec.md)
+- [核心合同](../contracts.md) · [状态与命令](04-state-and-commands.md)

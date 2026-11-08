@@ -1,6 +1,6 @@
 # 消费者快速上手
 
-本指南面向**使用** MeguvizUI 的应用开发者，目标是约 5 分钟跑通第一个界面。它讲的是「怎么把库接进你的 App」，不是「怎么从源码构建库」——构建者视角见 [GETTING_STARTED.md](GETTING_STARTED.md) 与 [安装与接入](installation.md)。
+本指南面向**使用** MeguvizUI 的应用开发者，目标是约 5 分钟跑通第一个界面。它讲的是「怎么把库接进你的 App」，不是「怎么从源码构建库」——构建者视角见[开发与验证](development.md) 与 [安装与接入](installation.md)。
 
 ## 先决条件
 
@@ -84,6 +84,28 @@ class MainActivity : Activity() {
 - 根视图仍归调用者所有：`setContentView(ui.root)` 之后继续用 `ui.scope` 构建；`ui.close()` 幂等，提前关闭后再调用 `openMeguvizUi()` 会开一个新会话。
 - 需要 `WindowSession` 支撑的会话（Android 桥）改用 `AndroidUiBinding.open(window, root)`，见[桥接指南](guides/bridges-android.md)。
 
+Java 调用方走同一个公开入口的静态外观类（`api/public-api.txt` 中的 `UiScopeKt.openMeguvizUi`），同样是一行：
+
+```java
+public final class MainActivity extends Activity {
+    private UiScope ui;
+
+    @Override protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        ui = UiScopeKt.openMeguvizUi(this);
+        setContentView(ui.root());
+    }
+    // 生命周期托管，不需要 onDestroy；需要提前关闭时调用 ui.close()（幂等）。
+}
+```
+
+> 为什么是 `UiScopeKt` 而不是新的顶层 `inline` 入口：新增顶层函数会新增一个 `*Kt` 公开描述符，
+> 且 `inline` 访问私有成员会生成 `access$*` 合成公开方法，两者都要改 JVM ABI 基线。现有
+> `@JvmOverloads` 入口已经对 Java/Kotlin 都是一行，优先复用；取舍详见家族联合改进报告 `lead-r3`。
+
+**关闭顺序**：上面的入口把会话交给 Activity 生命周期，无需手写 `onDestroy()`；这只对该入口成立。
+直接使用 `UiScope` / `WindowSession` 时，必须按[生命周期与关闭](quickstart/03-lifecycle-and-close.md)先关 binding、再关窗口会话。
+
 ## 三条关键约定
 
 1. **主线程独占**：`UiSession` 的构造、挂载、属性提交、释放和 `close()` 都必须在 Android 主线程调用，否则抛 `IllegalStateException("UI operation requires the main thread")`（源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/UiSession.kt`）。纯模型计算可以放后台，但不能据此推断 View 可以异步构造。
@@ -113,5 +135,5 @@ class MainActivity : Activity() {
 ## 下一步
 
 - [示例索引](examples.md)：`samples/` 下真实样例。
-- [核心合同](contracts.md)、[调度与帧所有权](scheduling.md)、[属性与更新](property-semantics.md)。
+- [核心合同](contracts.md)、[调度与帧所有权](guides/scheduler.md)、[属性与更新](guides/properties.md)。
 - 可选桥与 P2 模块见 [可选桥](bridges.md) 与 [P2 可选能力](p2.md)。

@@ -348,7 +348,7 @@
 ## 相关文档
 
 - [错误目录](error-catalog.md)：逐字消息 → 触发条件 → 排查 → 解决
-- [核心合同](../contracts.md)、[属性与更新](../property-semantics.md)、[生命周期与失败恢复](../lifecycle.md)
+- [核心合同](../contracts.md)、[属性与更新](../guides/properties.md)、[生命周期与失败恢复](../quickstart/03-lifecycle-and-close.md)
 - [调度器、帧驱动与背压](../guides/scheduler.md)、[属性绑定与 PropertySpec](../guides/properties.md)
 - [生命周期与关闭](../quickstart/03-lifecycle-and-close.md)、[状态保存与恢复](../quickstart/05-restoration.md)
 - [可选桥](../bridges.md)、[Android 桥（消费者视角）](../guides/bridges-android.md)

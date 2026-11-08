@@ -3,7 +3,7 @@
 > 适用范围：MeguvizUI 源码候选 1.2.0（含 P2 模块）。已发布 1.0.0 不含 `submitStates` / `StateUpdate` 等源码候选 API。
 >
 > 证据分级（全文统一）：
-> - **host 已验证**：JDK 17 主机探针的可复现结果，完整记录在 [docs/development.md](../development.md) 与 [docs/scheduling.md](../scheduling.md)。只覆盖 JVM 分配与调度语义，不含 ART、真机或绘制。
+> - **host 已验证**：JDK 17 主机探针的可复现结果，完整记录在 [docs/development.md](../development.md) 与 [docs/scheduling.md](../guides/scheduler.md)。只覆盖 JVM 分配与调度语义，不含 ART、真机或绘制。
 > - **准入记录**：[docs/p2.md](../p2.md) 的「性能准入」表是 2026-10-27 在单台物理机（PMA110，Android 17 / API 37，源码指纹 `431d13…`）上的 A/B 实测记录，用于说明模块边界，**不是普适数字**。本文不重复这些数字，只引用其结论与边界。
 > - **需真机验证**：本文所有参数取值建议都属于推断，必须用 [measurement.md](measurement.md) 的方法在自己的设备上复核。
 
