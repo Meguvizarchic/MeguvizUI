@@ -84,24 +84,37 @@ class MainActivity : Activity() {
 - 根视图仍归调用者所有：`setContentView(ui.root)` 之后继续用 `ui.scope` 构建；`ui.close()` 幂等，提前关闭后再调用 `openMeguvizUi()` 会开一个新会话。
 - 需要 `WindowSession` 支撑的会话（Android 桥）改用 `AndroidUiBinding.open(window, root)`，见[桥接指南](guides/bridges-android.md)。
 
+> **版本前提**：本页的 `xxx.bind(...)` 链式写法属于源码版本 **1.2.0**（尚未发布到 Maven Central，
+> 只能用本地候选 / `meguviz-bom:1.2.0` 消费，见[安装与接入](installation.md)）。若你依赖的是 Central 上
+> 已发布的 **1.0.0**，请改用 `session.bind(view, Properties.plainText())`（见[仓库 README](../README.md)），
+> 否则会出现「方法找不到」。不要把 1.2.0 的写法配 1.0.0 的坐标。
+
 Java 调用方走同一个公开入口的静态外观类（`api/public-api.txt` 中的 `UiScopeKt.openMeguvizUi`），同样是一行：
 
 ```java
+import android.app.Activity;
+import android.os.Bundle;
+import io.github.jichuo1.meguviz.ui.widgets.UiScope;
+import io.github.jichuo1.meguviz.ui.widgets.UiScopeKt;
+
 public final class MainActivity extends Activity {
     private UiScope ui;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         ui = UiScopeKt.openMeguvizUi(this);
-        setContentView(ui.root());
+        setContentView(ui.getRoot());
     }
     // 生命周期托管，不需要 onDestroy；需要提前关闭时调用 ui.close()（幂等）。
 }
 ```
 
+`UiScope` 的 `root` 是 Kotlin 属性，Java 侧的访问器是 **`getRoot()`**（`api/public-api.txt:1620`），
+不是 `root()`；入口签名为 `static UiScope openMeguvizUi(Activity)`（`:1634`）。
+
 > 为什么是 `UiScopeKt` 而不是新的顶层 `inline` 入口：新增顶层函数会新增一个 `*Kt` 公开描述符，
-> 且 `inline` 访问私有成员会生成 `access$*` 合成公开方法，两者都要改 JVM ABI 基线。现有
-> `@JvmOverloads` 入口已经对 Java/Kotlin 都是一行，优先复用；取舍详见家族联合改进报告 `lead-r3`。
+> 且 `inline` 访问私有成员会生成 `access$*` 合成公开方法，两者都要改 JVM ABI 基线。现有公开入口
+> 对 Java/Kotlin 都是一行，优先复用；取舍详见家族联合改进报告 `lead-r3`。
 
 **关闭顺序**：上面的入口把会话交给 Activity 生命周期，无需手写 `onDestroy()`；这只对该入口成立。
 直接使用 `UiScope` / `WindowSession` 时，必须按[生命周期与关闭](quickstart/03-lifecycle-and-close.md)先关 binding、再关窗口会话。

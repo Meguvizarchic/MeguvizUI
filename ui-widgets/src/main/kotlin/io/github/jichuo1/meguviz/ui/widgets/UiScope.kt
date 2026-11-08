@@ -64,7 +64,9 @@ private val opened = WeakHashMap<Activity, WeakReference<UiScope>>()
  * [UiScope.scope]. For a `WindowSession`-backed session use the Android bridge's
  * `AndroidUiBinding.open(window, root)` instead.
  */
-@JvmOverloads
+// No @JvmOverloads: there are no default parameters, so it generated no overloads and only
+// misled readers into expecting a Java-visible variant. The single JVM signature is
+// UiScopeKt.openMeguvizUi(Activity), which Java callers use directly.
 fun Activity.openMeguvizUi(): UiScope {
     check(Looper.myLooper() === Looper.getMainLooper()) { "openMeguvizUi must be called on the main thread" }
     check(!isDestroyed) { "${javaClass.name} is destroyed" }

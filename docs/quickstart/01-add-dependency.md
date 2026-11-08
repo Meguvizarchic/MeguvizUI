@@ -7,6 +7,9 @@
 - `meguviz-ui-lumen-bridge` 与 `meguviz-ui-android-bridge` 的上游尚未发布到 Maven Central，因此这两个桥**不在 Central 提供**，只能用源码构建并显式启用（`-PenableLumen=true` / `-PenableAndroid=true`）。
 
 写依赖时请确认你引用的是 `1.0.0`（已发布）还是本地候选；不要写 `1.2.0` 到 Maven Central 的坐标上。
+跨库联调可改用家族本地 `io.github.jichuo1.meguviz:meguviz-bom:1.2.0`（`/Volumes/DevEnvironment/meguviz-joint/local-maven`，
+未发布、未签名），用 `implementation(platform(...))` 后家族坐标可省略版本号；注入方式见
+`meguviz-joint/tools/meguviz-bom.init.gradle.kts`。该 BOM 只覆盖本地确有字节的 6 个 1.2.0 制品。
 
 ## 普通应用：Maven Central
 
@@ -59,7 +62,9 @@ P2 模块默认关闭，启用方式与边界见 [P2 可选能力](../p2.md)。
 // 消费项目的 settings.gradle.kts
 dependencyResolutionManagement {
     repositories {
-        maven { url = uri(providers.gradleProperty("meguvizUiRepository").get()) }
+        // getOrElse: 未传 -P 时不会因 Provider 缺失而抛异常，直接回退到源码构建产物目录。
+        maven { url = uri(providers.gradleProperty("meguvizUiRepository")
+            .getOrElse(file("../MeguvizUI/build/repo").absolutePath)) }
         google()
         mavenCentral()
     }
