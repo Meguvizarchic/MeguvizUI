@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- The Gradle wrapper is pinned on purpose (reviewed distributionSha256Sum), like the AGP/Kotlin
+         toolchain in gradle/libs.versions.toml. A newer Gradle release is a notice, not a defect, and
+         properties files cannot carry a #noinspection comment, so the notice is ignored only here. -->
+    <issue id="AndroidGradlePluginVersion">
+        <ignore regexp="gradle-wrapper\.properties" />
+    </issue>
+</lint>
