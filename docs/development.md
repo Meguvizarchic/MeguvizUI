@@ -58,7 +58,9 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 2026-11-07 的再一轮处理对抗审查点名的第一热点：`PropertyBinding.close` 无条件调用 `discardInvalid()`，而 `UiSession.releaseNode` 的扫描又排在 `runCleanup` 之前，于是一次子树释放会扫描 B+1 次（B 为关闭的绑定数），每次 O(S+C)。现在 `UiSession` 用私有 `discardBatch` 计数把 `rebind`/`releaseNode` 的清理包成批次，逐绑定关闭跳过自己的扫描、由批次在 cleanup 之后统一扫描一次；`releaseNode` 的扫描也移到 `runCleanup` 之后——绑定关闭才是让其排队工作失效的原因，原来的顺序正是迫使每个 `PropertyBinding.close` 再扫一遍的根因。
 
-代价与限制：新增 1 个 mangled 内部方法 `discardForBindingClose$ui_core`（本仓基线此前没有 mangled internal，这里为一个显著的释放风暴收益付出最小 ABI 面）。批量抑制需要真实 View/Context，**只能设备验证**，本轮未测。
+代价与限制：新增 1 个 mangled 内部方法 `discardForBindingClose$ui_core`。更正：本仓基线**已有 6 个同类 mangled 成员**（`CloseRequest.setCurrent$ui_core`/`setCompleted$ui_core`/`setFailure$ui_core`、`UiSession.resolve$ui_core`/`getSession$ui_core`/`getIdentity$ui_core`），所以这不是开先例；但它提醒这类内部细节确实会进入 JVM 公开签名，新增时应当谨慎。批量抑制需要真实 View/Context，**只能设备验证**，本轮未测。
+
+同轮对抗复核（`34-adversarial-round3.md`）的结论：顺序变化不漏（有效性单调递减，后扫描是前扫描超集）、`close()` 先 `scheduler.close()` 再 release 正确、嵌套 `batchedDiscard` 计数平衡；未发现崩溃/泄漏/永久卡死缺陷。
 
 同轮复核后**刻意未做**的一项：`discardInvalid` 命令循环里的 `queue.contains(entry)` 与 `queue.remove(entry)` 在 `ArrayDeque` 上都是线性，多命令同时失效时是 O(C²)（实测 `command-discard-stale,256` 的 p99 从 4.2µs 劣化到 46.7µs，分配与中位数不变）。没做的原因：那个 `contains` 同时是校验器重入（`close()`/`pause()`/嵌套 `discardInvalid`）期间的防护——去掉它会让队列已清空或被嵌套调用搬走的条目被重复计数，修它需要引入能跨嵌套调用可见的「仍在队列中」标记，风险高于收益。留待有设备与压测条件时再评估。
 
