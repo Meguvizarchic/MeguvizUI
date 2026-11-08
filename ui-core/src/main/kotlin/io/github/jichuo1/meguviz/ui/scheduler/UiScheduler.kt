@@ -287,6 +287,14 @@ class UiScheduler(
     private var handoffAccepted = 0L
     /** Producer-side rejections; folded into [rejected] on the owner. */
     private var handoffRejected = 0L
+    /**
+     * Guarded by `handoffLock`; incremented each time [mergeHandoff] takes staged entries. A producer
+     * records the value it saw when it staged. If the value differs when its dispatch turns out to
+     * be refused, the owner has already taken the entry (the fast path moves the entry object into
+     * the owner queue, where it may even have run), so the submission can no longer be rolled back
+     * and is reported as accepted instead of rejected-but-executed.
+     */
+    private var handoffMergeEpoch = 0L
     private val handoffDispatchPending = AtomicBoolean(false)
     private val handoffDrain = Runnable { mergeHandoff() }
     private var nextStateGroups = ArrayDeque<Any>(stateCapacity)
@@ -450,6 +458,7 @@ class UiScheduler(
         val dispatcher = dispatcher ?: return handoffReject(RejectionReason.CLOSED)
         var coalesced = false
         var rollback: (() -> Unit)? = null
+        var epoch = 0L
         synchronized(handoffLock) {
             rejectionForState()?.let { return handoffReject(it) }
             val existing = handoffStates[slot]
@@ -489,17 +498,20 @@ class UiScheduler(
                 }
             }
             handoffAccepted++
+            epoch = handoffMergeEpoch
         }
+        val verdict = if (coalesced) SubmitResult.Coalesced else SubmitResult.Accepted
         if (!scheduleHandoffDispatch(dispatcher)) {
-            return unwindRefusedDispatch(checkNotNull(rollback), dispatcher)
+            return unwindRefusedDispatch(checkNotNull(rollback), dispatcher, epoch, verdict)
         }
-        return if (coalesced) SubmitResult.Coalesced else SubmitResult.Accepted
+        return verdict
     }
 
     /** Non-blocking command submission from any thread; see [submitStateAsync]. */
     fun submitCommandAsync(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult {
         val dispatcher = dispatcher ?: return handoffReject(RejectionReason.CLOSED)
         var rollback: (() -> Unit)? = null
+        var epoch = 0L
         synchronized(handoffLock) {
             rejectionForState()?.let { return handoffReject(it) }
             if (handoffCommands.size >= commandCapacity) {
@@ -509,9 +521,10 @@ class UiScheduler(
             handoffCommands.addLast(entry)
             rollback = { handoffCommands.remove(entry) }
             handoffAccepted++
+            epoch = handoffMergeEpoch
         }
         if (!scheduleHandoffDispatch(dispatcher)) {
-            return unwindRefusedDispatch(checkNotNull(rollback), dispatcher)
+            return unwindRefusedDispatch(checkNotNull(rollback), dispatcher, epoch, SubmitResult.Accepted)
         }
         return SubmitResult.Accepted
     }
@@ -548,20 +561,31 @@ class UiScheduler(
      * [mergeHandoff]), merges them. There is deliberately no permanent terminal flag: a dispatcher
      * may recover, and a hidden state that silently turns every later async submission into CLOSED
      * would be unobservable to callers.
+     *
+     * If the owner merged the handoff after this submission was staged ([handoffMergeEpoch] moved),
+     * the entry now lives in the owner queue and may already have run: it can neither be taken back
+     * nor safely mutated from this thread. The refusal is then moot (the owner is demonstrably
+     * draining) and the submission keeps [accepted] as its verdict; nothing is rolled back.
      */
     private fun unwindRefusedDispatch(
         rollback: () -> Unit,
         dispatcher: OwnerThreadDispatcher,
-    ): SubmitResult.Rejected {
+        epoch: Long,
+        accepted: SubmitResult,
+    ): SubmitResult {
+        val merged: Boolean
         val hasRemaining: Boolean
         synchronized(handoffLock) {
-            rollback()
-            if (handoffAccepted > 0L) handoffAccepted--
-            handoffRejected++
+            merged = handoffMergeEpoch != epoch
+            if (!merged) {
+                rollback()
+                if (handoffAccepted > 0L) handoffAccepted--
+                handoffRejected++
+            }
             hasRemaining = handoffStates.isNotEmpty() || handoffCommands.isNotEmpty()
         }
         if (hasRemaining) scheduleHandoffDispatch(dispatcher)
-        return SubmitResult.Rejected(RejectionReason.CLOSED)
+        return if (merged) accepted else SubmitResult.Rejected(RejectionReason.CLOSED)
     }
 
     /**
@@ -612,6 +636,9 @@ class UiScheduler(
                 foldHandoffCounters()
                 return
             }
+            // From here on the staged entries belong to the owner (or are re-staged as leftovers
+            // that the owner is responsible for): producers that staged earlier can no longer roll back.
+            handoffMergeEpoch++
             if (pendingStateCount + handoffStates.size > stateCapacity ||
                 pendingCommands + handoffCommands.size > commandCapacity) {
                 // Something may not fit: keep the exact original merge under the lock, so the
