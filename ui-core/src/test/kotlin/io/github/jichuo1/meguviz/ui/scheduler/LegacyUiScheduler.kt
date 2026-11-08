@@ -66,7 +66,9 @@ internal class LegacyUiScheduler(
     private class StateEntry(
         var isValid: () -> Boolean,
         var action: () -> Unit,
-    )
+    ) {
+        var revision: Long = 0L
+    }
 
     /**
      * Reusable open-addressing group table. Group ids are assigned in insertion order, so
@@ -206,9 +208,6 @@ internal class LegacyUiScheduler(
     /** Producer-side rejections; folded into [rejected] on the owner. */
     private var handoffRejected = 0L
     private val handoffDispatchPending = AtomicBoolean(false)
-    /** Kept in sync with UiScheduler: a refused replacement dispatch makes the handoff terminal. */
-    @Volatile
-    private var handoffTerminated = false
     private val handoffDrain = Runnable { mergeHandoff() }
     private var nextStateGroups = ArrayDeque<Any>(stateCapacity)
     private var overlappingStates = 0
@@ -359,29 +358,36 @@ internal class LegacyUiScheduler(
         var coalesced = false
         var rollback: (() -> Unit)? = null
         synchronized(handoffLock) {
-            val rejection = rejectionForState()
-            if (handoffTerminated || rejection != null) {
-                return handoffReject(rejection ?: RejectionReason.CLOSED)
-            }
+            rejectionForState()?.let { return handoffReject(it) }
             val existing = handoffStates[slot]
             if (existing != null) {
                 val previousIsValid = existing.isValid
                 val previousAction = existing.action
+                val revision = ++existing.revision
                 existing.isValid = isValid
                 existing.action = action
                 handoffCoalesced++
                 coalesced = true
                 rollback = {
-                    existing.isValid = previousIsValid
-                    existing.action = previousAction
+                    if (existing.revision == revision) {
+                        existing.isValid = previousIsValid
+                        existing.action = previousAction
+                    }
                     if (handoffCoalesced > 0L) handoffCoalesced--
                 }
             } else {
                 if (handoffStates.size >= stateCapacity) {
                     return handoffReject(RejectionReason.STATE_CAPACITY)
                 }
-                handoffStates[slot] = StateEntry(isValid, action)
-                rollback = { handoffStates.remove(slot) }
+                val entry = StateEntry(isValid, action)
+                entry.revision = 1L
+                handoffStates[slot] = entry
+                val revision = entry.revision
+                rollback = {
+                    if (handoffStates[slot] === entry && entry.revision == revision) {
+                        handoffStates.remove(slot)
+                    }
+                }
             }
             handoffAccepted++
         }
@@ -396,10 +402,7 @@ internal class LegacyUiScheduler(
         val dispatcher = dispatcher ?: return handoffReject(RejectionReason.CLOSED)
         var rollback: (() -> Unit)? = null
         synchronized(handoffLock) {
-            val rejection = rejectionForState()
-            if (handoffTerminated || rejection != null) {
-                return handoffReject(rejection ?: RejectionReason.CLOSED)
-            }
+            rejectionForState()?.let { return handoffReject(it) }
             if (handoffCommands.size >= commandCapacity) {
                 return handoffReject(RejectionReason.COMMAND_CAPACITY)
             }
@@ -446,24 +449,12 @@ internal class LegacyUiScheduler(
         val hasRemaining: Boolean
         synchronized(handoffLock) {
             rollback()
-            handoffCoalesced = 0L
-            handoffAccepted = 0L
-            handoffRejected = 1L
+            if (handoffAccepted > 0L) handoffAccepted--
+            handoffRejected++
             hasRemaining = handoffStates.isNotEmpty() || handoffCommands.isNotEmpty()
         }
-        if (hasRemaining && !scheduleHandoffDispatch(dispatcher)) terminateHandoff()
+        if (hasRemaining) scheduleHandoffDispatch(dispatcher)
         return SubmitResult.Rejected(RejectionReason.CLOSED)
-    }
-
-    private fun terminateHandoff() {
-        synchronized(handoffLock) {
-            handoffTerminated = true
-            handoffStates.clear()
-            handoffCommands.clear()
-            handoffCoalesced = 0L
-            handoffAccepted = 0L
-            handoffRejected = 0L
-        }
     }
 
     /**

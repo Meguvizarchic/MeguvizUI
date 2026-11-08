@@ -141,7 +141,10 @@ class UiScheduler(
     private class StateEntry(
         var isValid: () -> Boolean,
         var action: () -> Unit,
-    )
+    ) {
+        /** Incremented on every producer coalesce; a refused submission only rolls back its own revision. */
+        var revision: Long = 0L
+    }
 
     /**
      * Reusable open-addressing group table. Group ids are assigned in insertion order, so
@@ -285,9 +288,6 @@ class UiScheduler(
     /** Producer-side rejections; folded into [rejected] on the owner. */
     private var handoffRejected = 0L
     private val handoffDispatchPending = AtomicBoolean(false)
-    /** Once the owner dispatcher has permanently refused a dispatch, no staged work can ever merge. */
-    @Volatile
-    private var handoffTerminated = false
     private val handoffDrain = Runnable { mergeHandoff() }
     private var nextStateGroups = ArrayDeque<Any>(stateCapacity)
     private var overlappingStates = 0
@@ -451,31 +451,42 @@ class UiScheduler(
         var coalesced = false
         var rollback: (() -> Unit)? = null
         synchronized(handoffLock) {
-            val rejection = rejectionForState()
-            if (handoffTerminated || rejection != null) {
-                return handoffReject(rejection ?: RejectionReason.CLOSED)
-            }
+            rejectionForState()?.let { return handoffReject(it) }
             val existing = handoffStates[slot]
             if (existing != null) {
                 // Same in-place reuse as the owner fast path: a burst for one hot slot allocates
                 // nothing, and the slot keeps its staged position.
                 val previousIsValid = existing.isValid
                 val previousAction = existing.action
+                val revision = ++existing.revision
                 existing.isValid = isValid
                 existing.action = action
                 handoffCoalesced++
                 coalesced = true
                 rollback = {
-                    existing.isValid = previousIsValid
-                    existing.action = previousAction
+                    // Another producer may have coalesced into this entry while `post` was in
+                    // flight; restoring the old value then would erase its accepted update.
+                    if (existing.revision == revision) {
+                        existing.isValid = previousIsValid
+                        existing.action = previousAction
+                    }
                     if (handoffCoalesced > 0L) handoffCoalesced--
                 }
             } else {
                 if (handoffStates.size >= stateCapacity) {
                     return handoffReject(RejectionReason.STATE_CAPACITY)
                 }
-                handoffStates[slot] = StateEntry(isValid, action)
-                rollback = { handoffStates.remove(slot) }
+                val entry = StateEntry(isValid, action)
+                entry.revision = 1L
+                handoffStates[slot] = entry
+                val revision = entry.revision
+                // A later producer may coalesce into the very entry this call created. Removing the
+                // slot unconditionally on rollback would then also erase its accepted value.
+                rollback = {
+                    if (handoffStates[slot] === entry && entry.revision == revision) {
+                        handoffStates.remove(slot)
+                    }
+                }
             }
             handoffAccepted++
         }
@@ -490,10 +501,7 @@ class UiScheduler(
         val dispatcher = dispatcher ?: return handoffReject(RejectionReason.CLOSED)
         var rollback: (() -> Unit)? = null
         synchronized(handoffLock) {
-            val rejection = rejectionForState()
-            if (handoffTerminated || rejection != null) {
-                return handoffReject(rejection ?: RejectionReason.CLOSED)
-            }
+            rejectionForState()?.let { return handoffReject(it) }
             if (handoffCommands.size >= commandCapacity) {
                 return handoffReject(RejectionReason.COMMAND_CAPACITY)
             }
@@ -530,14 +538,16 @@ class UiScheduler(
     }
 
     /**
-     * Producer side. Unwinds a refused dispatch by rolling back **only** this submission: another
-     * producer may have staged work while `post` was in flight and has already been told "Accepted".
-     * Because the failed `post` cleared [handoffDispatchPending], a replacement dispatch is posted
-     * for whatever remains staged. If that post is refused too, the handoff is terminal: no owner
-     * can ever merge it, so it is dropped and all later submissions reject with CLOSED.
+     * Producer side. Rolls back **only** this submission: another producer may have staged work
+     * while `post` was in flight and has already been told "Accepted". Diagnostics are adjusted
+     * incrementally, so other producers' acceptances, coalescences and rejections are preserved.
      *
-     * Producer counters are folded into the owner-side ones only on the owner thread; the terminal
-     * teardown therefore drops those diagnostics rather than racing with the owner.
+     * The failed `post` cleared [handoffDispatchPending], so a replacement dispatch is requested
+     * for whatever remains staged. If that post is refused too, the staged entries are kept rather
+     * than silently discarded: the next successful post, or the next owner frame ([drain] calls
+     * [mergeHandoff]), merges them. There is deliberately no permanent terminal flag: a dispatcher
+     * may recover, and a hidden state that silently turns every later async submission into CLOSED
+     * would be unobservable to callers.
      */
     private fun unwindRefusedDispatch(
         rollback: () -> Unit,
@@ -546,28 +556,12 @@ class UiScheduler(
         val hasRemaining: Boolean
         synchronized(handoffLock) {
             rollback()
-            // Keep the pre-existing diagnostic contract: a refused teardown drops the producer
-            // counters of this handoff generation (work staged by other producers survives, but
-            // its diagnostics are not folded) and counts exactly one rejection for this call.
-            handoffCoalesced = 0L
-            handoffAccepted = 0L
-            handoffRejected = 1L
+            if (handoffAccepted > 0L) handoffAccepted--
+            handoffRejected++
             hasRemaining = handoffStates.isNotEmpty() || handoffCommands.isNotEmpty()
         }
-        if (hasRemaining && !scheduleHandoffDispatch(dispatcher)) terminateHandoff()
+        if (hasRemaining) scheduleHandoffDispatch(dispatcher)
         return SubmitResult.Rejected(RejectionReason.CLOSED)
-    }
-
-    /** Terminal teardown of a handoff whose owner dispatcher refused even the replacement post. */
-    private fun terminateHandoff() {
-        synchronized(handoffLock) {
-            handoffTerminated = true
-            handoffStates.clear()
-            handoffCommands.clear()
-            handoffCoalesced = 0L
-            handoffAccepted = 0L
-            handoffRejected = 0L
-        }
     }
 
     /**
