@@ -15,7 +15,7 @@ class LumenUiBridge(private val ui: UiSession, lumen: LumenSurfaceSession, priva
 
     fun <V : View> bind(ref: ViewRef<V>, options: LumenSurfaceOptions, source: View? = null): SurfaceRegistration {
         ui.assertOwner()
-        val engine = checkNotNull(lumen) { "Lumen bridge closed" }
+        val engine = checkNotNull(lumen) { "Lumen bridge closed: the bridge was already closed, so bind() is refused. Create a new bridge for the new session." }
         val ownership = ui.reserveProperties(ref, setOf("background"))
         val binding = try { engine.bind(ref.get(), options, source) } catch (failure: Throwable) { ownership.close(); throw failure }
         val registration = SurfaceRegistration(ui, binding, ownership) { registrations.remove(it) }

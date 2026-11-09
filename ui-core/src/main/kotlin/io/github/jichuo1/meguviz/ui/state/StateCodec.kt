@@ -22,7 +22,7 @@ interface StateCodec<S> {
 data class EncodedState(val codecId: String, val version: Int, val data: StateValue.Record) {
     init { require(codecId.isNotBlank()); require(version > 0) }
     fun <S> decode(codec: StateCodec<S>): S {
-        require(codec.id == codecId) { "Wrong state codec" }
+        require(codec.id == codecId) { "Wrong state codec: this state was encoded by codec '$codecId' but decode() was given codec '${codec.id}'. Decode it with the codec whose id matches." }
         return codec.decode(version, data)
     }
 }
@@ -39,7 +39,7 @@ class StableIdStore(restored: Map<NodeIdentity, Int> = emptyMap()) {
     private var nextId = 1
     init {
         require(ids.values.all { it in 1..0x00ffffff }) { "Stable IDs must be in the generated-ID range" }
-        require(ids.values.distinct().size == ids.size) { "Duplicate native ID" }
+        require(ids.values.distinct().size == ids.size) { "Duplicate native ID: ${ids.entries.groupBy({ it.value }, { it.key.path }).filterValues { it.size > 1 }} (id -> stable paths). Every stable path needs its own id." }
         require(ids.keys.map { it.path }.distinct().size == ids.size) { "Duplicate stable path" }
     }
 

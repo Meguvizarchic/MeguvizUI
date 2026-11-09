@@ -56,7 +56,7 @@ class PropertyBinding<V : View, T> internal constructor(
 
     fun submit(value: T): SubmitResult {
         ref.session.assertOwner()
-        check(!closed) { "Binding closed" }
+        check(!closed) { "Binding closed: this property binding was already released (its view ref or session was released or closed), so submit() is refused. Bind the property again on a live view ref." }
         val spec = checkNotNull(property)
         val snapshot = spec.snapshot(value)
         val token = ref.token(resources = spec.resourceSensitive)

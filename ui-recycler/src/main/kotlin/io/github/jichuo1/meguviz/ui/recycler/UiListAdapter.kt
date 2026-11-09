@@ -166,5 +166,9 @@ abstract class UiListAdapter<T : Any, H : RecyclerView.ViewHolder>(
         failure?.let { throw it }
     }
 
-    private fun assertOwner() { check(Looper.myLooper() === Looper.getMainLooper()) { "Main thread required" } }
+    private fun assertOwner() { check(Looper.myLooper() === Looper.getMainLooper()) { wrongThreadMessage() } }
+
+    /** Built out of line so the hot check above keeps its original, tiny body. */
+    private fun wrongThreadMessage(): String =
+        "Main thread required: UiListAdapter was used on thread '${Thread.currentThread().name}'. Call it from the main thread, for example with view.post { ... }."
 }

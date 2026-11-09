@@ -44,8 +44,8 @@ fun UiPlan.validate(maxNodes: Int = 4096, maxDepth: Int = 64): ValidatedUiPlan {
         for (node in siblings) {
             require(node.key.isNotBlank() && keys.add(node.key)) { "Empty or duplicate sibling key: ${node.key}" }
             require(node.componentId.isNotBlank() && node.componentSchema > 0) { "Invalid component identity" }
-            require(node.width >= 0 || node.width == -1 || node.width == -2) { "Invalid width" }
-            require(node.height >= 0 || node.height == -1 || node.height == -2) { "Invalid height" }
+            require(node.width >= 0 || node.width == -1 || node.width == -2) { "Invalid width ${node.width} for node '${node.key}': use a size >= 0 (pixels), -1 (match parent) or -2 (wrap content)" }
+            require(node.height >= 0 || node.height == -1 || node.height == -2) { "Invalid height ${node.height} for node '${node.key}': use a size >= 0 (pixels), -1 (match parent) or -2 (wrap content)" }
             require(++count <= maxNodes) { "Plan size exceeds limit" }
             if (node.children.isNotEmpty()) visit(node.children, depth + 1)
         }
@@ -72,7 +72,7 @@ class PlanComponent<P : ViewGroup, LP : ViewGroup.LayoutParams, V : View>(
         val factory = registry.resolve(type)
         return object : ResolvedComponent {
             override fun mount(session: UiSession, parent: ViewGroup, node: PlanNode): ViewRef<*> {
-                val typedParent = requireNotNull(parentClass.cast(parent)) { "Parent type mismatch" }
+                val typedParent = requireNotNull(parentClass.cast(parent)) { "Parent type mismatch: the parent view is ${parent.javaClass.name} but node '${node.key}' expects ${parentClass.name}. Check the parent node's component type in the plan." }
                 return session.mount(typedParent, parentPolicy, ViewKey(node.key), type,
                     layoutParams(node.width, node.height), factory)
             }
@@ -171,9 +171,9 @@ class MountedUiPlan internal constructor(
     private var rootRefs: List<ViewRef<*>> = roots
     private var viewRefs: Map<List<String>, ViewRef<*>> = refs
     fun <V : View> ref(path: List<String>, type: ComponentType<V>): ViewRef<V> {
-        val session = checkNotNull(owner) { "Plan is closed" }
+        val session = checkNotNull(owner) { "Plan is closed: ref() was called after the plan (or its session) was closed. Resolve refs only while the plan is open." }
         session.assertOwner()
-        val ref = requireNotNull(viewRefs[path]) { "Unknown plan path" }
+        val ref = requireNotNull(viewRefs[path]) { "Unknown plan path: $path. Pass the key path of a node in this plan, starting at a root key." }
         require(ref.component.id == type.id && ref.component.schema == type.schema && ref.component.viewClass === type.viewClass) { "Component type mismatch" }
         @Suppress("UNCHECKED_CAST")
         return ref as ViewRef<V>

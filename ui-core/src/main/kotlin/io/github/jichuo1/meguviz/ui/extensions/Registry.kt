@@ -53,7 +53,7 @@ class RegistrySnapshot private constructor(private val entries: Map<String, Fact
                 require(descriptor.spiMajor == 1 && descriptor.spiMinor == 0) { "Unsupported SPI version" }
                 require(descriptor.thread == "main" && descriptor.lifetime == "session") { "Unsupported lifecycle/thread contract" }
                 require(capabilities.containsAll(descriptor.requiredCapabilities)) { "Missing capabilities for $id" }
-                require(descriptor.overrides.all { it in byId && it != id }) { "Invalid override" }
+                require(descriptor.overrides.all { it in byId && it != id }) { "Invalid override: extension '$id' lists an override that is not a registered extension id, or lists itself. Overrides must name other registered extensions." }
                 descriptor.dependencies.forEach(::visit)
                 visiting.remove(id); done.add(id)
             }

@@ -72,7 +72,7 @@ class PrecomputedTextBinding<V : TextView>(
 
     /** Returns false when a normal setter was queued instead of precomputation. */
     fun submit(value: CharSequence): Boolean {
-        val session = checkNotNull(owner) { "Binding closed" }
+        val session = checkNotNull(owner) { "Binding closed: this PrecomputedTextBinding was already closed, so the call is refused. Create a new binding." }
         session.assertOwner()
         check(!closed)
         version.advance()

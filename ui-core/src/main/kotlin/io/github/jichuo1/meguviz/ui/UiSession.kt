@@ -26,7 +26,7 @@ class UiSession(
     driver: UiFrameDriver = ChoreographerFrameDriver(),
 ) : AutoCloseable {
     private var environmentValue: CreationEnvironment? = environment
-    val environment: CreationEnvironment get() { assertOwner(); return checkNotNull(environmentValue) { "Session disposed" } }
+    val environment: CreationEnvironment get() { assertOwner(); return checkNotNull(environmentValue) { "Session disposed: this UiSession is closed (close() was called, for example because its Activity was destroyed), so its creation environment is gone. Create a new session for the new Activity instead of reusing this one." } }
     private val handler = Handler(Looper.getMainLooper())
     private val closeRequested = AtomicBoolean(false)
     private val closeReceipt = CloseRequest()
@@ -96,7 +96,7 @@ class UiSession(
             view = factory.create(environment)
             require(component.viewClass.isInstance(view)) { "Factory type differs from component" }
             check(view.parent == null) { "Factory returned an already parented View" }
-            check(!views.containsKey(view)) { "View already managed" }
+            check(!views.containsKey(view)) { "View already managed: this exact View instance (${view.javaClass.name}) is already mounted or borrowed by this session. Mount a View once; release its ref first with session.release(ref), or use a separate View." }
             acquired = true
             view.configure()
             requireActive()
@@ -111,7 +111,7 @@ class UiSession(
 
     fun <V : View> borrow(view: V, key: ViewKey, component: ComponentType<V>): ViewRef<V> {
         requireActive()
-        check(!views.containsKey(view)) { "View already managed" }
+        check(!views.containsKey(view)) { "View already managed: this exact View instance (${view.javaClass.name}) is already mounted or borrowed by this session. Mount a View once; release its ref first with session.release(ref), or use a separate View." }
         require(component.viewClass.isInstance(view))
         val parent = view.parent as? ViewGroup
         if (parent != null) reserve(parent, key)

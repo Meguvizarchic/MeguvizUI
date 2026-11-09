@@ -56,8 +56,8 @@ class RefBindingSession internal constructor(
 
     internal fun activeScope(): CodeScope {
         checkOwner?.invoke()
-        val scope = checkNotNull(codeScope) { "Ref binding session is closed" }
-        check(currentUi?.invoke() == true && codeScope === scope) { "UI session is not active" }
+        val scope = checkNotNull(codeScope) { "Ref binding session is closed: the session was already closed, so refs, factories and method handles obtained from it are unusable. Obtain new ones from a live session." }
+        check(currentUi?.invoke() == true && codeScope === scope) { "UI session is not active: the UiSession behind this Ref binding was closed or replaced. Bind again from the current UiSession." }
         if (scope.state() != CodeScope.State.OPEN || scope.identity() != identity || scope.codeEpoch() != epoch) {
             throw StalePlanException("The borrowed CodeScope identity or epoch changed")
         }
@@ -128,7 +128,7 @@ class RefViewFactory<V : View> internal constructor(
     private var arguments: ((CreationEnvironment) -> Array<out Any?>)? = arguments
 
     override fun create(environment: CreationEnvironment): V {
-        val owner = checkNotNull(owner) { "Dynamic factory is closed" }
+        val owner = checkNotNull(owner) { "Dynamic factory is closed: its Ref binding session was closed. Create the factory from a live session." }
         owner.activeScope()
         val values = checkNotNull(arguments).invoke(environment)
         owner.activeScope()
@@ -171,11 +171,11 @@ internal class ReceiverLease<T : Any>(
     fun assertOwner() { owner?.assertOwner() }
 
     fun value(): T {
-        val owner = checkNotNull(owner) { "Receiver lease is closed" }
+        val owner = checkNotNull(owner) { "Receiver lease is closed: the lease (or its Ref binding session) was released before value() was called. Take a new lease." }
         owner.activeScope()
-        check(valid?.invoke() == true) { "View binding token is stale" }
+        check(valid?.invoke() == true) { "View binding token is stale: the view was rebound or released after this lease was taken. Take a new lease from the current binding." }
         owner.activeScope()
-        return checkNotNull(receiver) { "Receiver lease is closed" }
+        return checkNotNull(receiver) { "Receiver lease is closed: the lease (or its Ref binding session) was released before value() was called. Take a new lease." }
     }
 
     fun method(query: QuerySpec): RefMethodHandle {
@@ -205,7 +205,7 @@ class RefMethodHandle internal constructor(receiver: ReceiverLease<*>, plan: Met
     fun isCurrent(): Boolean = receiver?.isCurrent() == true
 
     fun invoke(vararg arguments: Any?): Any? {
-        val value = checkNotNull(receiver) { "Method handle is closed" }.value()
+        val value = checkNotNull(receiver) { "Method handle is closed: its receiver lease was released. Obtain a new method handle from a live session." }.value()
         return checkNotNull(plan).invoke(value, arguments)
     }
 

@@ -216,7 +216,7 @@ class UiScheduler(
                 index = (index + 1) and mask
             }
             // Unreachable while the table stays below 75% load; fail closed rather than loop.
-            throw IllegalStateException("group table is full")
+            throw IllegalStateException("group table is full: internal invariant violated (the fairness table must stay below 75% load). This is a bug in Meguviz UI, not in the caller; please report it together with the scheduler counters.")
         }
 
         fun keyAt(id: Int): Any = groupKeys[id]!!
