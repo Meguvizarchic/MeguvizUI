@@ -9,7 +9,7 @@ Python 3.11+ 用于标准库验证脚本，JDK 17 与 Android SDK 配置见 [安
 ./gradlew publishCandidate --no-daemon --max-workers=2
 ```
 
-`verifyHost` 实际执行核心合同测试、Android lint、示例构建、发布 AAR 正负编译、JVM API 基线比较与核心依赖边界检查。可选桥开启时增加对应模块验证，Android 还需导入固定哈希的上游候选，Ref 1.2.0 直接从 Maven Central 解析。
+`verifyHost` 实际执行核心合同测试、Android lint、示例构建、发布 AAR 正负编译、JVM API 基线比较、与已发布 1.0.0 的公开描述符超集检查（`verifyLegacyAbi`）与核心依赖边界检查。可选桥开启时增加对应模块验证，Android 还需导入固定哈希的上游候选，Ref 1.2.0 直接从 Maven Central 解析。
 
 Windows 可用 `gradlew.bat`；遇到 JDK Unix-domain socket 临时目录问题时，可用 `scripts/gradle-local.ps1`，它仅对当前进程设置工程内临时目录。
 
@@ -179,7 +179,7 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 ## 验证边界
 
-报告生成在各模块 `build/` 及根目录 `build/reports/`，不提交设备标识或运行回执。API 基线描述本候选的 JVM 公开签名，不是历史稳定版二进制兼容证明。
+报告生成在各模块 `build/` 及根目录 `build/reports/`，不提交设备标识或运行回执。`api/*.txt` 描述本候选的 JVM 公开签名；与已发布 1.0.0 的二进制兼容另由 `api/legacy/1.0.0/` 检查（`verifyLegacyAbi`），它只证明公开 JVM 描述符没有丢失，不证明行为兼容。新增发布版本后用 `python build-logic/verification/legacy_abi.py generate --root . --version <版本> --artifacts-dir <Maven 布局的制品目录>` 生成对应基线；确需移除某个成员时，在 `api/legacy/<版本>/allowed-removals.txt` 里逐行写 `类名 :: 成员声明 # 理由`，经评审后才可提交。
 
 `verifyDevice` 需要已授权的真实设备及完整设备矩阵输入；缺少证据时应失败。`verifyReleaseCandidate` 是额外的完整验收门禁，需要公开仓库之外的项目选择、设备、性能及整合记录。公开源码不附带这些私有记录，因此默认 host 成功不能使发布门禁通过。
 

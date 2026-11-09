@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 
+from legacy_abi import compare, parse_dump, read_allowed
 from gates import core_dependency_errors, parse_tests, release, resolved_upstream_errors, source_hash, upstream_snapshot, validate_receipt, write
 
 TEMP_ROOT = Path(__file__).resolve().parents[2] / "build/reports/gates/test-tmp"
@@ -311,8 +312,72 @@ class GateContracts(unittest.TestCase):
             self.assertTrue(resolved_upstream_errors(root, {"core", "ref"}))
 
 
+OLD_DUMP = """// header
+public final class a.B<T> implements java.lang.AutoCloseable {
+  public a.B(a.D, int);
+    descriptor: (La/D;I)V
+
+  public a.B(a.D, int, int, kotlin.jvm.internal.DefaultConstructorMarker);
+    descriptor: (La/D;IIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+
+  public final int size();
+    descriptor: ()I
+}
+"""
+
+
+class LegacyAbiContracts(unittest.TestCase):
+    """The published release must stay a subset of the current API (binary compatibility)."""
+
+    def problems(self, current, allowed=frozenset()):
+        return compare(parse_dump(OLD_DUMP), parse_dump(current), set(allowed))
+
+    def test_identical_and_additive_changes_are_accepted(self):
+        additive = OLD_DUMP.replace("implements java.lang.AutoCloseable", "implements java.lang.AutoCloseable, java.io.Serializable").replace(
+            "  public final int size();", "  public final int extra();\n    descriptor: ()I\n\n  public final int size();")
+        self.assertEqual([], self.problems(OLD_DUMP))
+        self.assertEqual([], self.problems(additive))
+
+    def test_members_survive_the_blank_lines_javap_prints_between_them(self):
+        parsed = parse_dump(OLD_DUMP)["a.B"]
+        self.assertEqual(3, len(parsed["members"]))
+
+    def test_a_dropped_kotlin_default_argument_constructor_is_reported(self):
+        # What happens when a parameter is added to the primary constructor: the synthetic
+        # (..., int mask, DefaultConstructorMarker) constructor old call sites link to is gone.
+        dropped = OLD_DUMP.replace(
+            "  public a.B(a.D, int, int, kotlin.jvm.internal.DefaultConstructorMarker);\n    descriptor: (La/D;IIILkotlin/jvm/internal/DefaultConstructorMarker;)V\n\n", "")
+        result = self.problems(dropped)
+        self.assertEqual(1, len(result), result)
+        self.assertIn("DefaultConstructorMarker", result[0])
+
+    def test_removed_class_changed_signature_and_lost_interface_are_reported(self):
+        self.assertEqual(["class removed: a.B"], self.problems("public final class a.Other {\n}\n"))
+        changed = OLD_DUMP.replace("public final int size();\n    descriptor: ()I", "public final long size();\n    descriptor: ()J")
+        self.assertTrue(any("size" in item for item in self.problems(changed)))
+        lost = OLD_DUMP.replace(" implements java.lang.AutoCloseable", "")
+        self.assertTrue(any("AutoCloseable" in item for item in self.problems(lost)))
+
+    def test_a_class_that_became_final_or_abstract_is_reported(self):
+        base = OLD_DUMP.replace("public final class", "public class")
+        self.assertTrue(any("modifiers" in item for item in compare(parse_dump(base), parse_dump(OLD_DUMP), set())))
+
+    def test_reviewed_removals_are_honoured_and_unrelated_ones_are_not(self):
+        dropped = OLD_DUMP.replace("  public final int size();\n    descriptor: ()I\n", "")
+        self.assertTrue(self.problems(dropped))
+        self.assertEqual([], self.problems(dropped, {"a.B :: public final int size();"}))
+        self.assertTrue(self.problems(dropped, {"a.B :: public final int other();"}))
+
+    def test_allowlist_file_ignores_comments_and_blank_lines(self):
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
+            path = Path(directory) / "allowed-removals.txt"
+            path.write_text("# reviewed 2026-11-09\n\na.B :: public final   int size();  # moved to C\n", encoding="utf-8")
+            self.assertEqual({"a.B :: public final int size();"}, read_allowed(path))
+
+
 if __name__ == "__main__":
-    result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(GateContracts))
+    suite = unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromTestCase(case) for case in (GateContracts, LegacyAbiContracts)])
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
     write(Path(__file__).resolve().parents[2] / "build/reports/gates/gate-contracts.json", {
         "status": "passed" if result.wasSuccessful() and result.testsRun > 0 else "failed",
         "test_count": result.testsRun, "failures": len(result.failures), "errors": len(result.errors),

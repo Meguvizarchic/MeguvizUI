@@ -36,4 +36,4 @@ close 先禁止新提交、失效 token、关闭 scheduler，再释放节点监�
 
 Registry 安装检查 SPI、能力、依赖环、重复和显式覆盖；一次 resolve 返回直接工厂 handle。稳态调用不再次遍历 provider，构造抛错不换 provider 重试。Registry 应归 session 所有；调用者提供的工厂闭包不得被自己存入全局 Context/receiver 缓存。
 
-正负编译源码见 `integration/compile-fixtures`；唯一公开 API 基线见 `api/public-api.txt`。初次基线没有宣称与尚不存在的旧正式版本二进制兼容。
+正负编译源码见 `integration/compile-fixtures`；唯一公开 API 基线见 `api/public-api.txt`。`api/public-api.txt` 只是当前候选的快照；与已发布 1.0.0 的二进制兼容由 `api/legacy/1.0.0/` 与 `verifyLegacyAbi` 单独检查（当前描述符必须是 1.0.0 描述符的超集，范围仅限公开 JVM 描述符，不含行为）。

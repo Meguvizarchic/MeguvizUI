@@ -4,6 +4,6 @@
 
 正例必须成功；错误父 LP、错误 typed ref、向纯数据快照塞 View 的反例必须由编译器报告类型不匹配。任意网络错误、缺类、编译器启动失败均不能充当反例通过。每项命令、退出码、日志、输入哈希与候选坐标保存在 `build/reports/compile-fixtures/receipt.json`。
 
-`api/public-api.txt` 是初次候选的 JVM 公开描述符基线。只有经过人工审查 API 变化后才显式执行 `--update-api`；普通验证不重写基线。它包含 Kotlin 编译生成的公开 ABI，因此同时保留真实 Kotlin 正负消费编译。当前没有更早的正式发布，本检查不声称已经证明任意历史消费者二进制兼容。
+`api/public-api.txt` 是初次候选的 JVM 公开描述符基线。只有经过人工审查 API 变化后才显式执行 `--update-api`；普通验证不重写基线。它包含 Kotlin 编译生成的公开 ABI，因此同时保留真实 Kotlin 正负消费编译。这份基线是当前候选自己的快照，本身证明不了历史二进制兼容；与已发布 1.0.0 的比较由 `build-logic/verification/legacy_abi.py check` 完成（基线在 `api/legacy/1.0.0/`，取自 Maven Central 的制品）。两者都只覆盖公开 JVM 描述符，不覆盖行为。
 
 脚本需要已有精确 Kotlin compiler POM 与依赖缓存、公开 Android 37 SDK、JDK 的 `java/javap`。未解析到正确依赖时 fail closed 并记录 blocked，不下载替代版本。`--gradle-cache` 与 `--android-jar` 可显式配置环境。

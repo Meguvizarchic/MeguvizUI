@@ -89,6 +89,13 @@ val gateContracts = tasks.register<Exec>("verifyGateContracts") {
         "build-logic/verification/test_gates.py")
 }
 
+val legacyAbi = tasks.register<Exec>("verifyLegacyAbi") {
+    group = "verification"
+    description = "Requires the current public JVM descriptors to contain every member of the published release baselines."
+    commandLine(providers.gradleProperty("pythonExecutable").getOrElse("python"),
+        "build-logic/verification/legacy_abi.py", "check", "--root", rootDir.absolutePath)
+}
+
 val p2Start = tasks.register<Exec>("startP2Verification") {
     commandLine(providers.gradleProperty("pythonExecutable").getOrElse("python"),
         "build-logic/verification/p2_gates.py", "start", "--root", rootDir.absolutePath,
@@ -259,7 +266,7 @@ tasks.register<Exec>("verifyP2Matrix") {
 tasks.register<Exec>("verifyHost") {
     group = "verification"
     description = "Runs host compilation, contracts, lint and boundary checks with a fresh receipt."
-    dependsOn(hostStart, compileFixtures, gateContracts, ":ui-core:assembleRelease", ":ui-core:testDebugUnitTest", ":ui-core:lintDebug",
+    dependsOn(hostStart, compileFixtures, gateContracts, legacyAbi, ":ui-core:assembleRelease", ":ui-core:testDebugUnitTest", ":ui-core:lintDebug",
         ":ui-core:writeRuntimeDependencies", ":ui-widgets:assembleRelease", ":ui-widgets:lintDebug",
         ":samples:standalone:assembleDebug", ":samples:standalone:assembleRelease", ":samples:standalone:lintDebug",
         ":samples:xml-interop:assembleDebug", ":samples:xml-interop:assembleRelease", ":samples:xml-interop:lintDebug")
