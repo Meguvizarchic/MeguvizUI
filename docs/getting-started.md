@@ -85,7 +85,7 @@ class MainActivity : Activity() {
 - 需要 `WindowSession` 支撑的会话（Android 桥）改用 `AndroidUiBinding.open(window, root)`，见[桥接指南](guides/bridges-android.md)。
 
 > **版本前提**：本页的 `xxx.bind(...)` 链式写法属于源码版本 **1.2.0**（尚未发布到 Maven Central，
-> 只能用本地候选 / `meguviz-bom:1.2.0` 消费，见[安装与接入](installation.md)）。若你依赖的是 Central 上
+> 只能用本地候选消费（可配合本地构建的 BOM [MeguvizBom](https://github.com/Meguvizarchic/MeguvizBom) 对齐版本），见[安装与接入](installation.md)）。若你依赖的是 Central 上
 > 已发布的 **1.0.0**，请改用 `session.bind(view, Properties.plainText())`（见[仓库 README](../README.md)），
 > 否则会出现「方法找不到」。不要把 1.2.0 的写法配 1.0.0 的坐标。
 
