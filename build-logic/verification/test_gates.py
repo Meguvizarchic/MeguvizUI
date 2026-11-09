@@ -362,6 +362,13 @@ class LegacyAbiContracts(unittest.TestCase):
         base = OLD_DUMP.replace("public final class", "public class")
         self.assertTrue(any("modifiers" in item for item in compare(parse_dump(base), parse_dump(OLD_DUMP), set())))
 
+    def test_a_published_public_class_that_lost_public_is_reported(self):
+        hidden = OLD_DUMP.replace("public final class a.B<T>", "final class a.B<T>")
+        self.assertTrue(any("no longer public" in item for item in self.problems(hidden)))
+
+    def test_javap_compiled_from_lines_are_ignored(self):
+        self.assertEqual([], self.problems('Compiled from "B.kt"\n' + OLD_DUMP))
+
     def test_reviewed_removals_are_honoured_and_unrelated_ones_are_not(self):
         dropped = OLD_DUMP.replace("  public final int size();\n    descriptor: ()I\n", "")
         self.assertTrue(self.problems(dropped))

@@ -71,7 +71,7 @@ def parse_header(line: str) -> dict:
     if not match:
         raise ValueError(f"Unrecognised class header: {line!r}")
     modifiers = set(match.group("modifiers").split())
-    return {"kind": match.group("kind"), "name": match.group("name"),
+    return {"kind": match.group("kind"), "name": match.group("name"), "modifiers": frozenset(modifiers),
             "shape": frozenset(modifiers & {"final", "abstract"}), "supertypes": frozenset(supertypes)}
 
 
@@ -96,7 +96,7 @@ def parse_dump(text: str) -> dict[str, dict]:
 
     for raw in text.splitlines():
         line = raw.rstrip()
-        if not line.strip() or line.startswith("//") or line == "}":
+        if not line.strip() or line.startswith("//") or line.startswith("Compiled from") or line == "}":
             continue
         if not line.startswith(" "):
             close_class()
@@ -136,6 +136,8 @@ def compare(legacy: dict[str, dict], current: dict[str, dict], allowed: set[str]
             problems.append(f"{name}: kind changed {before['kind']} -> {after['kind']}")
         if before["shape"] != after["shape"]:
             problems.append(f"{name}: modifiers changed {sorted(before['shape'])} -> {sorted(after['shape'])}")
+        if "public" in before["modifiers"] and "public" not in after["modifiers"]:
+            problems.append(f"{name}: no longer public")
         for supertype in sorted(before["supertypes"] - after["supertypes"]):
             problems.append(f"{name}: no longer extends or implements {supertype}")
         for member in sorted(old["members"] - new["members"]):
