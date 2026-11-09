@@ -21,7 +21,9 @@ dependencies {
 }
 ```
 
-不需要额外引入 Ref、Android 窗口运行时或 Lumen。已发布的 artifactId：`meguviz-ui-core`、`meguviz-ui-widgets`、`meguviz-ui-ref-bridge`，以及可选 P2 模块 `meguviz-ui-plan`、`meguviz-ui-recycler`、`meguviz-ui-text`、`meguviz-ui-layouts`、`meguviz-ui-prewarm`、`meguviz-ui-codegen-api`、`meguviz-ui-codegen`。`meguviz-ui-lumen-bridge` 与 `meguviz-ui-android-bridge` 的上游尚未发布到 Maven Central，暂不在 Central 提供。已发布的版本不会以不同内容覆盖。
+不需要额外引入 Ref、Android 窗口运行时或 Lumen。
+
+**消费者的 Kotlin 版本**：已发布的 UI 模块以 Kotlin 2.4 编译，类文件里的 Kotlin 元数据版本是 2.4.0（读取已发布字节确认），POM 与 Gradle 元数据都带 `kotlin-stdlib:2.4.21`。Kotlin 2.2 的编译器读不了 2.4 元数据（MeguvizAndroid 的 `docs/DEVELOPMENT_STATUS.md` 记录过这一结果）；按 Kotlin 编译器“可读高一个版本”的规则，消费方至少需要 Kotlin 2.3，但这一点没有在本仓库实测。MeguvizAndroid 的模块则以 Kotlin 2.2 元数据发布，对旧工具链更宽松，两者不要混为一谈。已发布的 artifactId：`meguviz-ui-core`、`meguviz-ui-widgets`、`meguviz-ui-ref-bridge`，以及可选 P2 模块 `meguviz-ui-plan`、`meguviz-ui-recycler`、`meguviz-ui-text`、`meguviz-ui-layouts`、`meguviz-ui-prewarm`、`meguviz-ui-codegen-api`、`meguviz-ui-codegen`。`meguviz-ui-lumen-bridge` 与 `meguviz-ui-android-bridge` 的上游尚未发布到 Maven Central，暂不在 Central 提供。已发布的版本不会以不同内容覆盖。
 
 ## 通过本地 Maven 消费
 

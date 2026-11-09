@@ -9,7 +9,7 @@ Python 3.11+ 用于标准库验证脚本，JDK 17 与 Android SDK 配置见 [安
 ./gradlew publishCandidate --no-daemon --max-workers=2
 ```
 
-`verifyHost` 实际执行核心合同测试、Android lint、示例构建、发布 AAR 正负编译、JVM API 基线比较、与已发布 1.0.0 的公开描述符超集检查（`verifyLegacyAbi`）与核心依赖边界检查。可选桥开启时增加对应模块验证，Android 还需导入固定哈希的上游候选，Ref 1.2.0 直接从 Maven Central 解析。
+`verifyHost` 实际执行核心合同测试、Android lint、示例构建、发布 AAR 正负编译、JVM API 基线比较、与已发布 1.0.0 的公开描述符超集检查（`verifyLegacyAbi`）与核心依赖边界检查。可选桥开启时增加对应模块验证，Android 与 Ref 都需要导入固定哈希的上游 1.2.0 候选：这两个版本尚未发布到 Maven Central（Central 上 `meguviz-ref-core` 目前只有 1.0.0），不能从 Central 解析。
 
 Windows 可用 `gradlew.bat`；遇到 JDK Unix-domain socket 临时目录问题时，可用 `scripts/gradle-local.ps1`，它仅对当前进程设置工程内临时目录。
 

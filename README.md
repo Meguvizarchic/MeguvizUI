@@ -73,7 +73,7 @@ Lumen 与 Android 两个桥的上游尚未发布到 Maven Central，因此暂不
 
 ## 🚀 快速开始
 
-已发布版本为 **`1.0.0`**（Maven Central，groupId `io.github.jichuo1.meguviz`）；源码版本为 `1.2.0`，尚未发布，与 Meguviz 家族统一版本（跳过 1.1.0）。尚无历史稳定版兼容证明。API 27 是声明的最低版本；发布门禁 `release` 仍为 blocked：核心设备矩阵、R8 后设备行为、真人 TalkBack、第二家厂商等尚未验收，完整设备、无障碍及性能矩阵尚未完成。
+已发布版本为 **`1.0.0`**（Maven Central，groupId `io.github.jichuo1.meguviz`）；源码版本为 `1.2.0`，尚未发布，与 Meguviz 家族统一版本（跳过 1.1.0）。与 1.0.0 的公开 JVM 描述符兼容由 `verifyLegacyAbi` 检查（只增不删）；行为层面尚无历史稳定版兼容证明。API 27 是声明的最低版本；发布门禁 `release` 仍为 blocked：核心设备矩阵、R8 后设备行为、真人 TalkBack、第二家厂商等尚未验收，完整设备、无障碍及性能矩阵尚未完成。
 
 普通应用依赖 `meguviz-ui-widgets` 即可，它会传递依赖 core：
 

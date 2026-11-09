@@ -16,7 +16,7 @@
 
 ## Ref 与 Android
 
-Ref 桥依赖 `io.github.jichuo1.meguviz:meguviz-ref-core:1.2.0`，Android 桥依赖 `meguviz-android-runtime`/`meguviz-android-window` 1.2.0。三者都是正式版本号，从 Maven Central 解析；[upstream-candidates.toml](../gradle/upstream-candidates.toml) 与 Gradle 校验元数据固定的是各自本地 1.2.0 候选的 SHA-256。
+Ref 桥依赖 `io.github.jichuo1.meguviz:meguviz-ref-core:1.2.0`，Android 桥依赖 `meguviz-android-runtime`/`meguviz-android-window` 1.2.0。三者都是正式版本号，但 1.2.0 目前**尚未发布到 Maven Central**（Central 上 `meguviz-ref-core` 目前只有 1.0.0），所以只能从本地候选仓库解析；[upstream-candidates.toml](../gradle/upstream-candidates.toml) 与 Gradle 校验元数据固定的是各自本地 1.2.0 候选的 SHA-256。
 
 上游 1.2.0 发布到 Central 之前，这两个桥在默认仓库下无法解析；发布后必须确认 Central 字节与 pins 一致，不一致时重新审阅并更新 pins，不能直接放宽校验。
 
