@@ -191,7 +191,7 @@
 - **原因 1**：在 `register`/`restoreAfterLayout` 之后又调用了 `userInteracted()`。`userInteracted()` 会递增交互代际并取消待恢复（`ViewRestoration.kt`）；`restoreAfterLayout` 只在代际一致时恢复（`:104-118`）。输入控制器应在记录新意图前调用它。
 - **原因 2**：`restoreAfterLayout(root)` 只在 `root.isLaidOut` 后触发一次（`:104-106`）；布局未完成时不会恢复。
 - **原因 3**：`ref.token(resources = true)` 已失效（theme/resource/attach 代际变化），恢复被跳过（`:107-108`）。
-- **原因 4**：保存的是 `ViewPresentation`（focus/scroll/selection），不包含文本内容；文本必须来自应用权威模型（`ViewRestoration.kt` 注释、`docs/state-codec.md`）。
+- **原因 4**：保存的是 `ViewPresentation`（focus/scroll/selection），不包含文本内容；文本必须来自应用权威模型（`ViewRestoration.kt` 注释、`docs/api-semantics.md`）。
 
 ### Q: 正确的恢复顺序
 

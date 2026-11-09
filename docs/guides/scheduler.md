@@ -241,4 +241,4 @@ data class SchedulerCounters(
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/ChoreographerFrameDriver.kt`
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/StateUpdate.kt`
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Properties.kt`（`PropertyBinding.submit` 的通道选择）
-- 合同与历史：`docs/scheduling.md`、`docs/contracts.md`
+- 合同与历史：`docs/contracts.md`、`docs/development.md`（调度器专项测量）

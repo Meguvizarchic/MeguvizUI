@@ -178,5 +178,5 @@ codeBinding.close()
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/UiSession.kt`（`onClose`/`onRelease`）
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/UiScheduler.kt`（`submitBatch`）
 - `settings.gradle.kts`、`gradle/libs.versions.toml`、`gradle/upstream-candidates.toml`
-- `docs/bridges/ref.md`、`docs/bridges.md`、`docs/installation.md`
+- `docs/bridges.md`、`docs/installation.md`
 - 可编译样例：`integration/compile-fixtures/positive-ref/Consumer.kt`

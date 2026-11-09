@@ -16,7 +16,7 @@
 
 上游两个制品的 SHA-256 固定在 `gradle/upstream-candidates.toml`。`settings.gradle.kts` 中已发布的 `x.y.z` 版本从 Maven Central 解析并按哈希校验；只有 `-SNAPSHOT` 版本才走 `build/upstream-repo` 镜像。
 
-**Central 状态：** `meguviz-ui-android-bridge` 与 `meguviz-ui-lumen-bridge` 的上游尚未发布到 Maven Central，因此这两个桥在默认仓库下无法解析，Central 上暂不提供（见 `docs/installation.md`）。`meguviz-ui-core`/`meguviz-ui-widgets` 的 `1.0.0` 已在 Central。
+**Central 状态：** `meguviz-ui-android-bridge` 的上游 1.2.0 尚未发布到 Maven Central，`meguviz-ui-lumen-bridge` 依赖 JitPack 上的 Lumen 1.5.5，因此这两个桥在默认仓库下无法解析，Central 上暂不提供（见 `docs/installation.md`）。`meguviz-ui-core`/`meguviz-ui-widgets` 的 `1.0.0` 已在 Central。
 
 ## 启用开关
 
@@ -144,4 +144,4 @@ fun androidResourceAuthority(state: ResourceState): ResourceAuthority
 - `ui-android-bridge/src/main/kotlin/io/github/jichuo1/meguviz/ui/android/AndroidWindowFrameDriver.kt`
 - `ui-android-bridge/src/main/kotlin/io/github/jichuo1/meguviz/ui/android/AndroidResourceAuthority.kt`
 - `settings.gradle.kts`、根 `build.gradle.kts`、`gradle/libs.versions.toml`、`gradle/upstream-candidates.toml`
-- `docs/bridges/android.md`、`docs/installation.md`
+- `docs/bridges.md`、`docs/installation.md`

@@ -4,7 +4,7 @@
 
 - **已发布版本：`1.0.0`**，位于 Maven Central，groupId 为 `io.github.jichuo1.meguviz`（见 [安装与接入](../installation.md)）。
 - **源码版本：`1.2.0`**（`gradle.properties` 中 `meguviz.version=1.2.0`），尚未发布到 Maven Central；只能通过源码构建出的本地候选仓库 `build/repo/` 消费。
-- `meguviz-ui-lumen-bridge` 与 `meguviz-ui-android-bridge` 的上游尚未发布到 Maven Central，因此这两个桥**不在 Central 提供**，只能用源码构建并显式启用（`-PenableLumen=true` / `-PenableAndroid=true`）。
+- `meguviz-ui-android-bridge` 的上游 1.2.0 尚未发布到 Maven Central，`meguviz-ui-lumen-bridge` 依赖 JitPack 上的 Lumen 1.5.5，因此这两个桥**不在 Central 提供**，只能用源码构建并显式启用（`-PenableLumen=true` / `-PenableAndroid=true`）。
 
 写依赖时请确认你引用的是 `1.0.0`（已发布）还是本地候选；不要写 `1.2.0` 到 Maven Central 的坐标上。
 跨库联调时，维护者的联合工作区里有一个未发布、未签名的本地候选 `io.github.jichuo1.meguviz:meguviz-bom:1.2.0`（只覆盖本地确有字节的

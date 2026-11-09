@@ -143,12 +143,12 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 
 ### 跨库联合调优
 
-2026-11-07 的 exa 联合调研（报告见会话研究副本）给出 8 条建议，按收益/成本排序，全部要求显式启用、可独立回退：
+2026-11-07 的联合调研（报告不随仓库提交）给出 8 条建议，按收益/成本排序，拟议全部要求显式启用、可独立回退。下表最后一列是**拟议的开关名**：除 R1 已改为默认行为外，这些开关在四个仓库的代码里都还不存在，不能直接使用。
 
-| # | 建议 | 适用层 | 显式启用方式 |
+| # | 建议 | 适用层 | 拟议开关（尚未实现） |
 | --- | --- | --- | --- |
 | R1 | 把帧预算真源贯通到调度决策（`FrameTick.deadlineNanos()` 作为唯一数值真源） | MeguvizAndroid | `meguviz.frame.budget=explicit` |
-| R2 | 统一 vsync fan-out 为「单入口派发 + 订阅」，桥接模块不得各自 `postFrameCallback` | ui-frame-shared / 各桥 | `enableSharedFrameDriver=true` + 编译期断言 |
+| R2 | 统一 vsync fan-out 为「单入口派发 + 订阅」，桥接模块不得各自 `postFrameCallback` | ui-frame-shared / 各桥 | `-PenableFrameShared=true`（模块与该开关已存在）+ 编译期断言（尚未实现） |
 | R3 | 把「同帧同槽合并」扩展到桥接栈的 begin/commit 往返 | MeguvizUI / Drawable / Lumen | `meguviz.jointCommit` |
 | R4 | 无锁队列拓扑显式化（SPSC / MPSC / multicast），不动 `BoundedMailbox` 语义 | MeguvizAndroid | `meguviz.queue.topology=auto` |
 | R5 | `BoundedMailbox` 的锁内 O(n) 移除改为 tombstone + owner 延迟清理 | MeguvizAndroid | `meguviz.queue.tombstone=true` |
@@ -211,10 +211,10 @@ settingsEvaluated { dependencyResolutionManagement.repositories.mavenLocal() }
 要点与限制：
 
 - 该方式验证的是「本机构建的上游 1.2.0 + 当前源码」，**不是** Central 上即将发布的字节；`gradle/verification-metadata.xml` 与 `upstream-candidates.toml` 的哈希校验必须以正式发布为准，所以这种运行要配合 `--dependency-verification=off`。
-- `ui-ref-bridge` 需要 `meguviz-ref-core:1.2.0`。它的源码在 `D:\DevArea\MeguvizRef` 的 `release/1.2.0` 分支（领先 `main` 28 个提交，`meguviz.version=1.2.0`，含 `verification/api-baseline/ref-core.txt`），尚未合并也未发布。该分支已有 worktree `D:\DevArea\MeguvizRef.worktrees\release-120-MeguvizRef`，在那里执行 `./gradlew :ref-core:publishLibraryPublicationToMavenLocal --offline` 即可补上这个坐标。
+- `ui-ref-bridge` 需要 `meguviz-ref-core:1.2.0`。它的源码在 [MeguvizRef](https://github.com/Meguvizarchic/MeguvizRef) 的 `main`（`gradle.properties` 里 `meguviz.version=1.2.0`）；截至 2026-11-09 该仓库还没有 `1.2.0` 标签，Maven Central 上 `meguviz-ref-core` 也只有 `1.0.0`。在 MeguvizRef 检出里执行 `./gradlew :ref-core:publishLibraryPublicationToMavenLocal --offline` 即可补上这个坐标。
 - MeguvizDrawable 的 `-Pmeguviz.profile=bridges` 需要 `meguviz-android-runtime` 与 `meguviz-ui-core` 的 1.2.0，可用同一 init 脚本与同两个发布步骤验证。
 
-本轮已用上述手法把三座桥全部实测通过：`ui-android-bridge` 11 例、`ui-lumen-bridge` 编译 + lint、`ui-ref-bridge` 13 例。
+维护者曾在本机用上述手法跑过三座桥：`ui-android-bridge` 11 例、`ui-lumen-bridge` 编译 + lint、`ui-ref-bridge` 13 例（当时的 1.2.0 候选；回执不随仓库提交，发布前应按上面的步骤重跑）。
 
 ## 维护规则
 

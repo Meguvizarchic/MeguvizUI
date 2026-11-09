@@ -52,7 +52,7 @@
 - 计量前先运行语义检查：命令 FIFO 与合并、重入提交下一帧可见、分组轮转、故障恢复、`close()` 清空队列。
 - 分别计时「提交 + drain」与「仅 drain」；部分 drain 场景用 `size/2` 作为操作上限；`state-batch` 的 `StateUpdate` 构造成本计入测量，因此不与逐次 `submitState` 直接比较。
 - 默认 warmup 2000 / iterations 4000。
-- 完整数据表与口径说明记录在 [docs/development.md](../development.md) 与 [docs/scheduling.md](../guides/scheduler.md)。
+- 完整数据表与口径说明记录在 [docs/development.md](../development.md)（调度器专项测量一节）；调度语义见 [docs/guides/scheduler.md](../guides/scheduler.md)。
 
 ### 2.4 LatestWorkProbe
 
@@ -62,7 +62,7 @@
 
 ### 2.5 Host 口径限制
 
-- `ThreadMXBean` 只计当前线程分配；HotSpot 逃逸分析可能消除临时对象，因此某些「改前」对照会被 JIT 标量替换，需要改用推算口径（见 `docs/scheduling.md` 的 `state-coalesce` 说明）。
+- `ThreadMXBean` 只计当前线程分配；HotSpot 逃逸分析可能消除临时对象，因此某些「改前」对照会被 JIT 标量替换，需要改用推算口径（见 `docs/development.md` 调度器专项测量里关于 `state-coalesce` 的说明）。
 - 不含 Android 绘制、Choreographer、ART、设备调度延迟。
 - 主机结果是探索性证据，不是 ART、帧耗时或设备性能承诺。
 
@@ -125,7 +125,9 @@
 
 ---
 
-## 4. 启动基准（benchmarks/）
+## 4. 启动基准（脚本不在本仓库）
+
+> 下面的 `benchmarks/collect_startup.py`、`benchmarks/scenarios.json`、`benchmarks/summarize.py` 属于维护者的消费者验证工作区，没有随本仓库提交，在本仓库里无法运行。本节只记录它们的口径，供自行实现同类采集时对照。
 
 ### 4.1 采集
 

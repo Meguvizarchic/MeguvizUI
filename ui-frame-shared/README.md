@@ -64,7 +64,7 @@ sessionA.close(); sessionB.close(); shared.close()
 
 ## 准入状态
 
-本模块已进入 `verifyP2`/`publishCandidate` 的主机聚合门禁，并已纳入 release 准入范围（`gates.py` 的 `allowed_p2`、`PROJECT_STATE.json`、`integration/profiles.json` 与 `verifyReleaseCandidate` 同步声明）。准入要求四类证据同时有效：
+本模块已进入 `verifyP2`/`publishCandidate` 的主机聚合门禁，并已纳入 release 准入范围（`build-logic/verification/gates.py` 的 `ALLOWED_P2`、`p2_gates.py` 的模块表与 `verifyReleaseCandidate` 同步声明）。准入要求四类证据同时有效：
 
 | 证据 | 来源 | 状态 |
 | --- | --- | --- |

@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-00AEEC?style=flat-square&labelColor=2d3a55)](LICENSE)
 [![Language](https://img.shields.io/badge/lang-Kotlin-DEA584?style=flat-square&labelColor=2d3a55)](https://github.com/Meguvizarchic/MeguvizUI)
 [![Issues](https://img.shields.io/github/issues/Meguvizarchic/MeguvizUI?style=flat-square&labelColor=2d3a55)](https://github.com/Meguvizarchic/MeguvizUI/issues)
-[![CI](https://github.com/jichuo1/MeguvizUI/actions/workflows/verify.yml/badge.svg)](https://github.com/jichuo1/MeguvizUI/actions/workflows/verify.yml)
+[![CI](https://github.com/Meguvizarchic/MeguvizUI/actions/workflows/verify.yml/badge.svg)](https://github.com/Meguvizarchic/MeguvizUI/actions/workflows/verify.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.jichuo1.meguviz/meguviz-ui-widgets)](https://central.sonatype.com/artifact/io.github.jichuo1.meguviz/meguviz-ui-widgets)
 
 [✨ 特性](#-特性) · [📦 模块](#-模块) · [🚀 快速开始](#-快速开始) · [💡 使用示例](#-使用示例) · [⚠️ 关键行为](#-关键行为) · [📚 文档](#-文档) · [📄 许可证](#-许可证)
@@ -67,7 +67,7 @@
 | `ui-prewarm` | `meguviz-ui-prewarm` | 可取消的有界主线程预热 |
 | `ui-frame-shared` | `meguviz-ui-frame-shared` | 可选的多会话共享帧驱动 |
 
-Lumen 与 Android 两个桥的上游尚未发布到 Maven Central，因此暂不在 Central 提供。
+Android 桥的上游 `meguviz-android-runtime`/`meguviz-android-window` 1.2.0 尚未发布到 Maven Central；Lumen 桥依赖的是 JitPack 上的 Lumen 1.5.5（Central 上的 Lumen 1.6.1 要求消费者用 compileSdk 37.2，本仓库用 37，见 [Lumen 桥](docs/guides/bridges-lumen.md)）。两个桥因此暂不在 Central 提供。
 
 <a id="quick-start"></a>
 
@@ -89,7 +89,7 @@ dependencies {
 从源码构建需要 JDK 17、Android SDK 37 与 Build Tools 37.0.0，在未提交的 `local.properties` 中配置 `sdk.dir`，然后构建核心、控件与两个示例：
 
 ```sh
-git clone https://github.com/jichuo1/MeguvizUI.git
+git clone https://github.com/Meguvizarchic/MeguvizUI.git
 cd MeguvizUI
 ./gradlew verifyHost publishCandidate --no-daemon --max-workers=2
 ```

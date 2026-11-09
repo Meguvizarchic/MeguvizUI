@@ -13,7 +13,7 @@
 | bridge artifactId | `meguviz-ui-lumen-bridge` | `ui-lumen-bridge/build.gradle.kts` |
 | 上游 | `com.github.jichuo1.LumenCoacervationEngine:lumen-engine:1.5.5` | `gradle/libs.versions.toml` |
 
-上游 Lumen 只发布在 JitPack。`settings.gradle.kts` 为它配置了内容过滤仓库：
+本桥依赖的是上游 Lumen 在 JitPack 上的 `1.5.5`。Lumen 自 2026-10-30 起也在 Maven Central 发布（坐标 `io.github.jichuo1:lumen-engine`，Central 上目前只有 `1.6.1`），但 `1.6.1` 的 AAR 元数据要求消费者用 compileSdk 37.2 编译（读取 Central 上的 AAR 确认：`minCompileMinorSdk=2`），而本仓库用 compileSdk 37，所以不能直接换成它；Lumen 源码 1.6.2 起不再要求 37.2，待 1.6.2 发布后本桥才有条件改依赖 Central 坐标。`settings.gradle.kts` 为 JitPack 坐标配置了内容过滤仓库：
 
 ```kotlin
 maven("https://jitpack.io") {
@@ -21,7 +21,7 @@ maven("https://jitpack.io") {
 }
 ```
 
-**Central 状态：** `meguviz-ui-lumen-bridge` 不在 Maven Central；Lumen 引擎本身也只走 JitPack。消费项目需要同时能解析 JitPack 与本地候选仓库。
+**Central 状态：** `meguviz-ui-lumen-bridge` 不在 Maven Central，它的 POM 依赖 JitPack 坐标 `com.github.jichuo1.LumenCoacervationEngine:lumen-engine`，默认仓库解析不到。消费项目需要同时能解析 JitPack 与本地候选仓库。
 
 ## 启用开关
 
@@ -156,7 +156,7 @@ data class LumenSurfaceOptions(
 
 ## 与 MeguvizDrawable 侧 background 登记的互斥
 
-这是混用两套桥时最容易踩的边界。事实依据见 `D:\DevArea\MeguvizDrawable\docs\engineering\BRIDGES.md`（Lumen / MeguvizUI 两节）：
+这是混用两套桥时最容易踩的边界。事实依据见 MeguvizDrawable 仓库的 [`docs/engineering/BRIDGES.md`](https://github.com/Meguvizarchic/MeguvizDrawable/blob/main/docs/engineering/BRIDGES.md)（Lumen / MeguvizUI 两节）：
 
 - MeguvizDrawable 的 `LumenSurfaceBridge` 用**宿主传入的** `BindingScope.claim(key)` 独占属性 key；`claim` 只存在于未发布的 drawable core 1.2.0。
 - Drawable 侧 `RecipeBackground` 用**每次新建的独立** `BindingScope` 走 `UiSession.bind`，把配方作为一个 MeguvizUI 属性（id 默认 `background`）。
@@ -175,6 +175,6 @@ data class LumenSurfaceOptions(
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/UiSession.kt`（`reserveProperties`）
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Properties.kt`（属性槽语义）
 - `settings.gradle.kts`、`gradle/libs.versions.toml`、`gradle.properties`
-- `docs/bridges/lumen.md`、`docs/bridges.md`
-- 上游 API：`lumen-engine/src/main/java/com/lumen/coacervation/engine/host/LumenSurfaceSession.kt`、`LumenSurfaceOptions.kt`
-- 互斥依据：`D:\DevArea\MeguvizDrawable\docs\engineering\BRIDGES.md`
+- `docs/bridges.md`
+- 上游 API（LumenCoacervationEngine 仓库）：`lumen-engine/src/main/java/com/lumen/coacervation/engine/host/LumenSurfaceSession.kt`、`LumenSurfaceOptions.kt`
+- 互斥依据：MeguvizDrawable 仓库的 `docs/engineering/BRIDGES.md`
