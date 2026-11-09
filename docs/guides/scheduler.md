@@ -60,7 +60,7 @@ fun interface OwnerThreadDispatcher {
 }
 ```
 
-另有一个**只含前 7 个参数的次级构造器**，内部以 `dispatcher = null` 委托——它是 1.2.0 之前存在的签名，保留下来让旧的二进制调用方继续链接。
+另有一个**只含前 7 个参数的次级构造器**，内部以 `dispatcher = null` 委托——它是 1.2.0 之前存在的签名，保留下来让旧的二进制调用方继续链接。它声明了与主构造器相同的默认值，这是有意的：省略尾部参数的 Kotlin 调用被编译成合成的默认参数构造器，只有带默认值的 7 参构造器才会生成它。两处默认值必须保持一致。
 
 `dispatcher` 为 `null` 时（默认）调度器保持纯 owner 线程独占，`submitStateAsync` / `submitCommandAsync` 一律返回 `Rejected(CLOSED)`；同步入口的行为与 1.2.0 之前完全一致。`UiSession` 会把主 `Handler` 装进去，因此用 `UiSession` 时异步入口默认可用。
 

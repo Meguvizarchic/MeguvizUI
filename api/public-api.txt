@@ -1014,6 +1014,9 @@ public final class io.github.jichuo1.meguviz.ui.scheduler.UiScheduler implements
   public io.github.jichuo1.meguviz.ui.scheduler.UiScheduler(io.github.jichuo1.meguviz.ui.scheduler.UiFrameDriver, kotlin.jvm.functions.Function0<kotlin.Unit>, int, int, int, long, kotlin.jvm.functions.Function0<java.lang.Long>);
     descriptor: (Lio/github/jichuo1/meguviz/ui/scheduler/UiFrameDriver;Lkotlin/jvm/functions/Function0;IIIJLkotlin/jvm/functions/Function0;)V
 
+  public io.github.jichuo1.meguviz.ui.scheduler.UiScheduler(io.github.jichuo1.meguviz.ui.scheduler.UiFrameDriver, kotlin.jvm.functions.Function0, int, int, int, long, kotlin.jvm.functions.Function0, int, kotlin.jvm.internal.DefaultConstructorMarker);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/scheduler/UiFrameDriver;Lkotlin/jvm/functions/Function0;IIIJLkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+
   public final java.lang.String getDriverOwner();
     descriptor: ()Ljava/lang/String;
 

@@ -82,20 +82,27 @@ class UiScheduler(
 ) : AutoCloseable {
 
     /**
-     * The pre-1.2 seven-argument constructor, kept so existing Java callers stay binary compatible.
+     * The pre-1.2 seven-argument constructor, kept so binaries built against 1.0.0 still link.
      *
      * It behaves exactly like the primary constructor with a null [dispatcher], i.e. owner-thread
      * only: the `submit*Async` entry points report [RejectionReason.CLOSED]. Source that used to
      * compile against the seven-argument form keeps compiling and keeps linking.
+     *
+     * The defaults must stay identical to the primary constructor's. They are declared here as
+     * well on purpose: Kotlin call sites that omitted trailing arguments were compiled against a
+     * synthetic `(…, int mask, DefaultConstructorMarker)` constructor, and that one is generated
+     * from the defaults of a constructor with exactly these seven parameters. Without them such a
+     * binary fails with `NoSuchMethodError`. Overload resolution prefers this constructor whenever
+     * a call needs no `dispatcher`, which is the same behavior as the primary one.
      */
     constructor(
         driver: UiFrameDriver,
         assertOwner: () -> Unit,
-        stateCapacity: Int,
-        commandCapacity: Int,
-        maxOperationsPerFrame: Int,
-        maxFrameWorkNanos: Long,
-        nanoTime: () -> Long,
+        stateCapacity: Int = 256,
+        commandCapacity: Int = 256,
+        maxOperationsPerFrame: Int = 64,
+        maxFrameWorkNanos: Long = 2_000_000,
+        nanoTime: () -> Long = System::nanoTime,
     ) : this(driver, assertOwner, stateCapacity, commandCapacity, maxOperationsPerFrame, maxFrameWorkNanos, nanoTime, null)
 
     /**
