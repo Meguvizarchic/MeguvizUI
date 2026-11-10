@@ -177,6 +177,64 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 - 「每次 post 约 15+ 分配」未实测：post 本身约 7 个对象，15+ 是 begin+post 往返的静态估算。
 - `SkinPrefs.write` 确为主线程同步 `commit()` 且全量读回，但不是该路径唯一的磁盘 I/O。
 
+### 桥接层热路径（2026-11-10）
+
+这一轮只动 `ui-android-bridge` 与它在 `ui-core` 里调用的会话路径，公开 JVM 签名不变（`api/public-api.txt` 与 `api/ui-android-bridge.txt` 逐字节一致），MeguvizAndroid 与 `UiScheduler` 未改。出发点是一条此前没有量过的链路：每次 `PropertyBinding.set` 都会向会话要一枚绑定令牌，会话再向上游资源域要一枚资源令牌，三层各自新建对象，尽管两次之间通常什么都没失效。
+
+| 改动 | 位置 | 做法 |
+| --- | --- | --- |
+| 帧来源标签不再每帧拼接 | `AndroidFrameDriver` / `AndroidWindowFrameDriver` | 驱动缓存 `"<owner>:<FrameTick.budgetSource()>"`，只在上游标签变化时重建 |
+| 帧序号不装箱 | `AndroidFrameDriver.lastFrameSequence` | 以原始 `long` 记录，只读 getter 按需装箱；未交付过帧时仍为 `null` |
+| 上游资源令牌按身份稳定 | `androidResourceAuthority` | 资源与主题都未失效时 `capture` 返回同一个 `ResourceState.Token`，任一失效后返回新对象 |
+| 会话绑定令牌复用 | `UiSession.token` | 每次仍调用 `ResourceAuthority.capture`；所捕获的对象（attach / theme / 本地资源 epoch、上游令牌）全部与上次是同一对象时返回上次的 `BindingToken` |
+| 有效性闭包复用 | `PropertyBinding` | 会话返回同一枚令牌时沿用已排队的有效性闭包 |
+| owner 检查 | `UiSession.assertOwner` | 构造时记下 owner 线程，比较线程身份；失败消息不变 |
+| 节点查找 | `UiSession` | 节点表改为 `LongSparseArray`（键是 `long` 身份，不再装箱），`ViewRef.get()` / `token()` 各只查一次；`close()` 仍按注册逆序释放 |
+
+`ResourceAuthority` 的合同没有变：每次取令牌都会调用一次 `capture`，是否过期只由 `isCurrent` 判定。自定义 authority 每次返回新对象时，会话每次也给出新令牌，行为与此前相同，只是享受不到复用。
+
+相对结果（同一台 arm64 模拟器、同一会话，非 debuggable 构建并以 `speed` 预编译，5 组交替运行、每侧每组 30 轮，取中位数；分配量来自运行时计数器，按 TLAB 粒度取整）：
+
+| 场景 | 改动前 | 改动后 | 时间比 |
+| --- | --- | --- | --- |
+| 交付一帧（无平台 deadline） | 214 ns / 328 B | 123 ns / 148 B | 0.58 |
+| 交付一帧（带平台 deadline） | 262 ns / 442 B | 135 ns / 180 B | 0.51 |
+| 上游 authority `capture` | 45 ns / 72 B | 36 ns / 0 B | 0.81 |
+| `UiSession.assertOwner` | 6.7 ns | 0.5 ns | 0.07 |
+| 取绑定令牌（上游资源域） | 144 ns / 154 B | 78 ns / 0 B | 0.54 |
+| 取绑定令牌（不涉及资源） | 83 ns / 80 B | 22 ns / 0 B | 0.26 |
+| `ViewRef.get()` | 16.7 ns / 9.6 B | 12.3 ns / 0 B | 0.74 |
+| 一次属性更新到提交（上游资源域） | 574 ns / 344 B | 474 ns / 160 B | 0.83 |
+| 一次属性更新到提交（本地资源域） | 524 ns / 264 B | 410 ns / 160 B | 0.78 |
+| 一次属性更新到提交（不涉及资源） | 520 ns / 264 B | 426 ns / 160 B | 0.82 |
+
+这些数字只说明同一设备上两个构建的相对差异，不是设备性能结论；模拟器的绝对值不能外推到真机，真机矩阵仍缺。`authority.isCurrent`（约 18 ns）与 MeguvizAndroid 自己的 owner 检查没有变化，属于上游成本。属性更新剩下的约 160 B / 400 ns 在 `UiScheduler` 的排队与提交里，本轮没有动。
+
+行为保持的证据：`ui-core` 84 例与 `ui-android-bridge` 14 例主机测试通过；新增的设备用例 `ui-android-bridge/src/androidTest/.../BridgeInstrumentation.kt`（8 例，真实主 Looper 与 `MainThreadDispatcher`，只替换物理帧源）覆盖预算来源与 deadline、上游失效、令牌按捕获内容过期、节点释放与逆序关闭、自定义 authority 的调用次数。把这份用例放到改动前的主源码上运行，7 例通过，唯一失败的是专门断言“令牌对象被复用”的那一例，即除复用本身外没有可观察差异。
+
+设备用例的运行方式（需要下文“可选桥 profile 的本地验证”里的本地上游 1.2.0 与 init 脚本）：
+
+```sh
+./gradlew :ui-android-bridge:connectedDebugAndroidTest \
+    -PenableAndroid=true --offline --dependency-verification=off -I <临时 init 脚本>
+```
+
+相对测量是这份 instrumentation 的可选部分，结果写在 instrumentation 的结束输出里，所以直接用 `am instrument` 运行已安装的测试 APK：
+
+```sh
+adb shell am instrument -w -e probe true -e probeRounds 30 -e probeWarmup 60 \
+    io.github.jichuo1.meguviz.ui.android.test/io.github.jichuo1.meguviz.ui.android.BridgeInstrumentation
+```
+
+用例全部通过后会逐轮输出 `probe,<场景>,<轮次>,<操作数>,<每次操作纳秒>,<每次操作字节>`。debug 构建的数字只能用来看趋势；上表来自非 debuggable 的测试 APK，这种构建方式没有写进仓库的构建脚本。
+
+考虑过但没有做的：
+
+- 在 `ViewRef` 上缓存节点，或让 `PropertyBinding` 持有稳定的动作闭包：前者改变公开描述符，后者会碰同槽合并的语义。
+- 缓存的上游令牌仍有效时跳过 `capture`：会改变自定义 authority 被调用的次数。
+- 上游失效改为推送：需要 MeguvizAndroid 新增订阅接口，不属于桥层可独立回退的改动。
+- `ui-ref-bridge` 每次调用里的两次作用域复核是有意的安全检查，保留；它与 `ui-lumen-bridge`、MeguvizDrawable 的 `RecipeBackground` 经由更便宜的 owner 检查、节点查找与令牌复用间接受益，本轮未单独测量。
+
 ## 验证边界
 
 报告生成在各模块 `build/` 及根目录 `build/reports/`，不提交设备标识或运行回执。`api/*.txt` 描述本候选的 JVM 公开签名；与已发布 1.0.0 的二进制兼容另由 `api/legacy/1.0.0/` 检查（`verifyLegacyAbi`），它只证明公开 JVM 描述符没有丢失，不证明行为兼容。新增发布版本后用 `python build-logic/verification/legacy_abi.py generate --root . --version <版本> --artifacts-dir <Maven 布局的制品目录>` 生成对应基线；确需移除某个成员时，在 `api/legacy/<版本>/allowed-removals.txt` 里逐行写 `类名 :: 成员声明 # 理由`，经评审后才可提交。
@@ -214,7 +272,7 @@ settingsEvaluated { dependencyResolutionManagement.repositories.mavenLocal() }
 - `ui-ref-bridge` 需要 `meguviz-ref-core:1.2.0`。它的源码在 [MeguvizRef](https://github.com/Meguvizarchic/MeguvizRef) 的 `main`（`gradle.properties` 里 `meguviz.version=1.2.0`）；截至 2026-11-09 该仓库还没有 `1.2.0` 标签，Maven Central 上 `meguviz-ref-core` 也只有 `1.0.0`。在 MeguvizRef 检出里执行 `./gradlew :ref-core:publishLibraryPublicationToMavenLocal --offline` 即可补上这个坐标。
 - MeguvizDrawable 的 `-Pmeguviz.profile=bridges` 需要 `meguviz-android-runtime` 与 `meguviz-ui-core` 的 1.2.0，可用同一 init 脚本与同两个发布步骤验证。
 
-维护者曾在本机用上述手法跑过三座桥：`ui-android-bridge` 11 例、`ui-lumen-bridge` 编译 + lint、`ui-ref-bridge` 13 例（当时的 1.2.0 候选；回执不随仓库提交，发布前应按上面的步骤重跑）。
+维护者曾在本机用上述手法跑过三座桥：`ui-android-bridge` 14 例（另有 8 例设备用例，见上文“桥接层热路径”）、`ui-lumen-bridge` 编译 + lint、`ui-ref-bridge` 13 例（当时的 1.2.0 候选；回执不随仓库提交，发布前应按上面的步骤重跑）。
 
 ## 维护规则
 

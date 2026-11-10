@@ -104,7 +104,7 @@ class AndroidFrameDriver(
 ) : UiFrameDriver, AutoCloseable {
     override val owner: String = "meguviz-android.runtime"
     var isClosed: Boolean; private set
-    var lastFrameSequence: Long?; private set
+    val lastFrameSequence: Long?   // 只读；尚未交付过帧时为 null
     fun onClose(action: () -> Unit)
     override fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket
     override fun close()
