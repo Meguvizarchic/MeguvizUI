@@ -20,6 +20,9 @@ internal class AndroidWindowFrameDriver(window: WindowSession, identity: Any, in
     private var closed = false
     private var attached = initiallyAttached
     private var closeAction: (() -> Unit)? = null
+    // Invariant: source == "$owner:$upstreamSource"; rebuilt only when the upstream label changes.
+    private var upstreamSource: String? = "unknown"
+    private var source = "$owner:unknown"
 
     init {
         dispatcher.checkOwner()
@@ -79,8 +82,17 @@ internal class AndroidWindowFrameDriver(window: WindowSession, identity: Any, in
         val callback = request.callback
         request.callback = null
         if (closed || !attached || callback == null) return 0
-        callback(tick.toUiBudget(owner))
+        callback(tick.toUiBudget(sourceOf(tick)))
         return 1
+    }
+
+    private fun sourceOf(tick: FrameTick): String {
+        val upstream = tick.budgetSource()
+        if (upstream != upstreamSource) {
+            source = "$owner:$upstream"
+            upstreamSource = upstream
+        }
+        return source
     }
 
     override fun close() {

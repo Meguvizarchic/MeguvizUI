@@ -41,6 +41,13 @@ class AndroidBridgeContractTest {
             nanos += 16_666_667L
             callback.onFrame(nanos)
         }
+        fun tickWithDeadline() {
+            checkOwner()
+            val callback = checkNotNull(frame)
+            frame = null
+            nanos += 16_666_667L
+            callback.onFrame(nanos, nanos + 8_000_000L, nanos + 16_666_667L)
+        }
         fun hasFrame(): Boolean = frame != null
         fun scheduler(): FrameScheduler = FrameScheduler(this, this, { errors += it }, 64)
     }
@@ -86,6 +93,44 @@ class AndroidBridgeContractTest {
         assertTrue(copied.estimated)
         assertEquals("meguviz-android.runtime:unknown", copied.source)
         driver.close(); upstream.close()
+    }
+
+    @Test fun budgetSourceFollowsEveryUpstreamLabelChangeAndIsNotRebuiltInBetween() {
+        val clock = PlatformClock()
+        val upstream = clock.scheduler()
+        val driver = AndroidFrameDriver(clock, upstream, Any())
+        val budgets = mutableListOf<FrameBudget>()
+        fun frame(deadline: Boolean) {
+            driver.requestFrame { budgets += it }
+            if (deadline) clock.tickWithDeadline() else clock.tick()
+        }
+        listOf(false, false, true, true, false, true).forEach(::frame)
+        val unknown = "meguviz-android.runtime:unknown"
+        val platform = "meguviz-android.runtime:platform-vsync"
+        assertEquals(listOf(unknown, unknown, platform, platform, unknown, platform), budgets.map { it.source })
+        assertSame(budgets[0].source, budgets[1].source)
+        assertSame(budgets[2].source, budgets[3].source)
+        assertEquals(listOf(true, true, false, false, true, false), budgets.map { it.estimated })
+        assertEquals(listOf(null, null, 58_000_001L, 74_666_668L, null, 108_000_002L), budgets.map { it.deadlineNanos })
+        assertEquals(List(6) { (it + 1) * 16_666_667L }, budgets.map { it.frameTimeNanos })
+        driver.close(); upstream.close()
+    }
+
+    @Test fun lastFrameSequenceIsUnsetUntilAFrameIsDeliveredAndThenFollowsUpstream() {
+        val clock = PlatformClock()
+        val upstream = clock.scheduler()
+        val driver = AndroidFrameDriver(clock, upstream, Any())
+        assertNull(driver.lastFrameSequence)
+        driver.requestFrame { fail("Cancelled frame delivered") }.cancel()
+        assertNull(driver.lastFrameSequence)
+        // Past the boxed-Long cache, so a stale or shared box would show.
+        repeat(300) { index ->
+            driver.requestFrame { }
+            clock.tick()
+            assertEquals((index + 1).toLong(), driver.lastFrameSequence)
+        }
+        driver.close(); upstream.close()
+        assertEquals(300L, driver.lastFrameSequence)
     }
 
     @Test fun deliveredTicketCannotCancelTheNextRequest() {
@@ -219,6 +264,49 @@ class AndroidBridgeContractTest {
         first.close()
         assertFalse(authority.isCurrent(fresh))
         second.close()
+    }
+
+    @Test fun resourceAuthorityReturnsTheSameTokenOnlyWhileTheUpstreamDomainIsUnchanged() {
+        val clock = PlatformClock()
+        val snapshot = ResourceSnapshot(320, 1f, "zh-CN", 0, 0, 360, 640, 0, "fixture")
+        val state = ResourceState(clock, "window", snapshot, 4)
+        val authority = androidResourceAuthority(state)
+        val independent = androidResourceAuthority(state)
+        val first = authority.capture()
+        assertSame(first, authority.capture())
+        // Another authority over the same state keeps its own token; both describe the same domain.
+        assertNotSame(first, independent.capture())
+        assertTrue(independent.isCurrent(first))
+        // An equal snapshot is not a change upstream, so it is not one here either.
+        state.update(snapshot)
+        assertSame(first, authority.capture())
+
+        val changes = listOf<() -> Unit>(
+            { state.invalidateTheme() },
+            { state.invalidateResources() },
+            { state.update(ResourceSnapshot(480, 1f, "zh-CN", 0, 0, 360, 640, 0, "fixture")) },
+        )
+        var previous = first
+        for (change in changes) {
+            change()
+            assertFalse(authority.isCurrent(previous))
+            val next = authority.capture()
+            assertNotSame(previous, next)
+            assertTrue(authority.isCurrent(next))
+            assertSame(next, authority.capture())
+            previous = next
+        }
+
+        var offThread: Throwable? = null
+        Thread { try { authority.capture() } catch (failure: Throwable) { offThread = failure } }.apply { start(); join() }
+        assertTrue(offThread is IllegalStateException)
+        assertSame(previous, authority.capture())
+
+        state.close()
+        assertFalse(authority.isCurrent(previous))
+        val closedCapture = assertThrows(IllegalStateException::class.java) { authority.capture() }
+        val closedToken = assertThrows(IllegalStateException::class.java) { state.token(ResourceState.ALL) }
+        assertEquals(closedToken.message, closedCapture.message)
     }
 
     @Test fun callbackFailureIsReportedByRealUpstreamAndClosesTheChannel() {

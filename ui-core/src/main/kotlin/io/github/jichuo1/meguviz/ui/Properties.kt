@@ -49,6 +49,8 @@ class PropertyBinding<V : View, T> internal constructor(
     private var property: PropertySpec<V, T>? = spec
     private var releaseAction: (() -> Unit)? = release
     private val slot = StateSlot(ref.identity, spec.id)
+    private var validityToken: BindingToken? = null
+    private var validity: (() -> Boolean)? = null
     var writes: Long = 0; private set
     var skips: Long = 0; private set
 
@@ -59,8 +61,7 @@ class PropertyBinding<V : View, T> internal constructor(
         check(!closed) { "Binding closed: this property binding was already released (its view ref or session was released or closed), so submit() is refused. Bind the property again on a live view ref." }
         val spec = checkNotNull(property)
         val snapshot = spec.snapshot(value)
-        val token = ref.token(resources = spec.resourceSensitive)
-        val valid = { !closed && token.isCurrent() }
+        val valid = validityOf(ref.token(resources = spec.resourceSensitive))
         val action = { apply(snapshot) }
         return if (spec.coalescible) ref.session.scheduler.submitState(slot, valid, action)
         else ref.session.scheduler.submitCommand(valid, action)
@@ -72,8 +73,20 @@ class PropertyBinding<V : View, T> internal constructor(
         check(!closed)
         val spec = checkNotNull(property)
         val snapshot = spec.snapshot(value)
-        val token = ref.token(resources = spec.resourceSensitive)
-        return ScheduledOperation(isValid = { !closed && token.isCurrent() }, action = { apply(snapshot) })
+        return ScheduledOperation(isValid = validityOf(ref.token(resources = spec.resourceSensitive)), action = { apply(snapshot) })
+    }
+
+    /**
+     * The validity check queued with each update. It depends only on this binding and [token], so
+     * while the session keeps returning the same token object the same function is queued again.
+     */
+    private fun validityOf(token: BindingToken): () -> Boolean {
+        val reusable = validity
+        if (reusable != null && validityToken === token) return reusable
+        val fresh = { !closed && token.isCurrent() }
+        validityToken = token
+        validity = fresh
+        return fresh
     }
 
     private fun apply(value: T) {
@@ -109,6 +122,8 @@ class PropertyBinding<V : View, T> internal constructor(
         closed = true
         applied = null
         property = null
+        validityToken = null
+        validity = null
         val release = releaseAction
         releaseAction = null
         try { release?.invoke() } finally { ref.session.discardForBindingClose() }

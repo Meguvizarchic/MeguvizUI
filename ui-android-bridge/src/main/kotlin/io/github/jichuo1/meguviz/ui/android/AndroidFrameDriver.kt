@@ -22,8 +22,14 @@ class AndroidFrameDriver(
     private var closeAction: (() -> Unit)? = null
     var isClosed: Boolean = false
         private set
-    var lastFrameSequence: Long? = null
-        private set
+    // Kept as a primitive so recording it does not box once per frame; the getter boxes on demand.
+    private var frameSequence = 0L
+    private var frameDelivered = false
+    val lastFrameSequence: Long? get() = if (frameDelivered) frameSequence else null
+    // Invariant: source == "$owner:$upstreamSource". The upstream label rarely changes, so the
+    // joined string is rebuilt only when it does instead of once per frame.
+    private var upstreamSource: String? = "unknown"
+    private var source = "$owner:unknown"
 
     init {
         dispatcher.checkOwner()
@@ -72,10 +78,20 @@ class AndroidFrameDriver(
         val callback = request.callback
         request.callback = null
         if (isClosed || callback == null) return 0
-        lastFrameSequence = tick.sequence()
+        frameSequence = tick.sequence()
+        frameDelivered = true
         // One upstream work unit is one bounded UI drain, not an unbounded second mailbox.
-        callback(tick.toUiBudget(owner))
+        callback(tick.toUiBudget(sourceOf(tick)))
         return 1
+    }
+
+    private fun sourceOf(tick: FrameTick): String {
+        val upstream = tick.budgetSource()
+        if (upstream != upstreamSource) {
+            source = "$owner:$upstream"
+            upstreamSource = upstream
+        }
+        return source
     }
 
     private fun closedByUpstream() {
@@ -106,8 +122,11 @@ class AndroidFrameDriver(
  * The derived work budget subtracts [FrameBudget.deadlineNanos] from the scheduler's
  * `System.nanoTime()`, so the upstream `FrameTick.deadlineNanos()` must share that time base.
  * Drivers that cannot guarantee it must leave the deadline null (`estimated = true`).
+ *
+ * [source] is the complete label, `"<driver owner>:<FrameTick.budgetSource()>"` for this tick;
+ * each driver keeps it and rebuilds it only when the upstream part changes.
  */
-internal fun FrameTick.toUiBudget(owner: String): FrameBudget {
+internal fun FrameTick.toUiBudget(source: String): FrameBudget {
     // The platform only knows the deadline when the upstream driver supplied one; otherwise the
     // budget stays advisory (estimated) and the scheduler keeps its fixed work budget.
     val deadline = deadlineNanos()
@@ -115,6 +134,6 @@ internal fun FrameTick.toUiBudget(owner: String): FrameBudget {
         frameTimeNanos = frameTimeNanos(),
         deadlineNanos = deadline,
         estimated = deadline == null,
-        source = "$owner:${budgetSource()}",
+        source = source,
     )
 }

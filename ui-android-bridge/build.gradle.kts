@@ -6,7 +6,11 @@ plugins {
 android {
     namespace = "io.github.jichuo1.meguviz.ui.android"
     compileSdk = 37
-    defaultConfig { minSdk = 27; consumerProguardFiles("consumer-rules.pro") }
+    defaultConfig {
+        minSdk = 27
+        consumerProguardFiles("consumer-rules.pro")
+        testInstrumentationRunner = "io.github.jichuo1.meguviz.ui.android.BridgeInstrumentation"
+    }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     publishing { singleVariant("release") { withSourcesJar() } }
     lint { abortOnError = true; warningsAsErrors = true }
