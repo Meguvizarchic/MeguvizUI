@@ -80,6 +80,27 @@ open class ParentScope<P : ViewGroup, LP : ViewGroup.LayoutParams>(
         try { FrameScope(session, ref.get()).children() } catch (failure: Throwable) { session.release(ref); throw failure }
         return ref
     }
+
+    // String-key forms of the calls above. [ViewKey] is a value class, so those compile to mangled JVM
+    // names (`text-p42mYIk`) that Java source cannot spell: without these a Java caller can open a
+    // session with `UiScopeKt.openMeguvizUi` but mount nothing through its scope. Each one only wraps
+    // the key and delegates: the same blank-key check, the same mount, no extra object. Kotlin callers
+    // may pass a plain string too; `ViewKey("title")` and `"title"` name the same key.
+    @JvmOverloads
+    fun <V : View> view(key: String, type: ComponentType<V>, params: LP, factory: ViewFactory<V>, configure: V.() -> Unit = {}): ViewRef<V> =
+        view(ViewKey(key), type, params, factory, configure)
+
+    @JvmOverloads fun text(key: String, params: LP, configure: TextView.() -> Unit = {}) = text(ViewKey(key), params, configure)
+    @JvmOverloads fun edit(key: String, params: LP, configure: EditText.() -> Unit = {}) = edit(ViewKey(key), params, configure)
+    @JvmOverloads fun button(key: String, params: LP, configure: Button.() -> Unit = {}) = button(ViewKey(key), params, configure)
+    @JvmOverloads fun image(key: String, params: LP, configure: ImageView.() -> Unit = {}) = image(ViewKey(key), params, configure)
+
+    @JvmOverloads
+    fun linear(key: String, params: LP, configure: LinearLayout.() -> Unit = {}, children: LinearScope.() -> Unit): ViewRef<LinearLayout> =
+        linear(ViewKey(key), params, configure, children)
+    @JvmOverloads
+    fun frame(key: String, params: LP, configure: FrameLayout.() -> Unit = {}, children: FrameScope.() -> Unit): ViewRef<FrameLayout> =
+        frame(ViewKey(key), params, configure, children)
 }
 
 class LinearScope(session: UiSession, parent: LinearLayout) : ParentScope<LinearLayout, LinearLayout.LayoutParams>(session, parent, LinearPolicy)

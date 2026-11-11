@@ -151,6 +151,23 @@ def main() -> int:
             passed = result.returncode == 0 if expected_success else result.returncode != 0 and expected_diagnostic
             receipt["checks"].append({"name": fixture, "status": "passed" if passed else "failed", "exit_code": result.returncode, "expected_compile_success": expected_success, "command": command, "log": str((output / f"{fixture}.log").relative_to(ROOT)), "sources": {str(path.relative_to(ROOT)): sha(path) for path in sources}})
 
+        # Java consumers: the ViewKey-typed scope calls have mangled JVM names, so only javac can show
+        # that the String-key forms keep the Java one-line path usable. Fail closed without javac.
+        javac = shutil.which("javac")
+        if not javac:
+            raise RuntimeError("javac must be available on PATH for the Java consumer fixture")
+        java_sources = sorted((fixture_root / "positive-java").glob("*.java"))
+        if not java_sources:
+            raise RuntimeError("No sources in required fixture positive-java")
+        java_output = output / "positive-java-classes"
+        shutil.rmtree(java_output, ignore_errors=True)
+        java_output.mkdir(parents=True)
+        java_command = [javac, "-encoding", "UTF-8", "-source", "17", "-target", "17", "-Xlint:-options", "-proc:none", "-classpath", classpath, "-d", str(java_output), *map(str, java_sources)]
+        result = subprocess.run(java_command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+        (output / "positive-java.log").write_text(result.stdout + result.stderr, "utf-8")
+        java_passed = result.returncode == 0 and any(java_output.rglob("*.class"))
+        receipt["checks"].append({"name": "positive-java", "status": "passed" if java_passed else "failed", "exit_code": result.returncode, "expected_compile_success": True, "command": java_command, "log": str((output / "positive-java.log").relative_to(ROOT)), "sources": {str(path.relative_to(ROOT)): sha(path) for path in java_sources}})
+
         public_sections = {"public-api": []}
         for module, module_jar in zip(modules, candidate_jars):
             with zipfile.ZipFile(module_jar) as archive:

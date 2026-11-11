@@ -222,7 +222,7 @@ def finish_host(root: Path, profiles: set[str]) -> int:
             errors.append(f"Missing actual release AAR: {module}")
     fixture_path = root / "build/reports/compile-fixtures/receipt.json"
     fixture = read(fixture_path) if fixture_path.is_file() else {}
-    expected_fixtures = {"positive", "negative-parent", "negative-ref", "negative-state", "negative-scope", "jvm-api-baseline"}
+    expected_fixtures = {"positive", "positive-java", "negative-parent", "negative-ref", "negative-state", "negative-scope", "jvm-api-baseline"}
     for profile in profiles & {"lumen", "ref", "android"}:
         expected_fixtures.update({f"positive-{profile}", f"ui-{profile}-bridge-api-baseline"})
     observed_fixtures = {item.get("name") for item in fixture.get("checks", []) if item.get("status") == "passed"}

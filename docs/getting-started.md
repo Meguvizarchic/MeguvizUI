@@ -94,6 +94,10 @@ Java 调用方走同一个公开入口的静态外观类（`api/public-api.txt` 
 ```java
 import android.app.Activity;
 import android.os.Bundle;
+import android.widget.FrameLayout;
+import android.widget.TextView;
+import io.github.jichuo1.meguviz.ui.ViewRef;
+import io.github.jichuo1.meguviz.ui.widgets.Properties;
 import io.github.jichuo1.meguviz.ui.widgets.UiScope;
 import io.github.jichuo1.meguviz.ui.widgets.UiScopeKt;
 
@@ -104,10 +108,19 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         ui = UiScopeKt.openMeguvizUi(this);
         setContentView(ui.getRoot());
+        // 字符串 key 的挂载方法是 Java 能调用的那一组（见下）。
+        ViewRef<TextView> title = ui.getScope().text("title", new FrameLayout.LayoutParams(-1, -2));
+        title.bind(Properties.INSTANCE.plainText()).submit("Updated");
     }
     // 生命周期托管，不需要 onDestroy；需要提前关闭时调用 ui.close()（幂等）。
 }
 ```
+
+**Java 只能用字符串 key 的挂载方法。** `ViewKey` 是 value class，以它为参数的 `text` / `edit` / `button` / `image` /
+`linear` / `frame` / `view` 在 JVM 上的名字带 `-`（例如 `text-p42mYIk`），Java 源码写不出来。所以 `ParentScope` 另有一组
+以 `String` 为 key 的同名方法（当前源码候选，未发布），它们只把字符串包成 `ViewKey` 再委托过去：同样的空白 key 检查、同一次挂载、
+不多分配对象。Java 侧可省略末尾的 `configure`（`text("title", params)`）；要传 lambda 时须 `return Unit.INSTANCE;`。
+`integration/compile-fixtures/positive-java/JavaConsumer.java` 由 `javac` 针对发布的 AAR 编译，作为这条路径的门禁。
 
 `UiScope` 的 `root` 是 Kotlin 属性，Java 侧的访问器是 **`getRoot()`**（`api/public-api.txt:1620`），
 不是 `root()`；入口签名为 `static UiScope openMeguvizUi(Activity)`（`:1634`）。
@@ -128,6 +141,7 @@ public final class MainActivity extends Activity {
 ## 推荐写法说明
 
 - `ParentScope` 已经提供 `text` / `edit` / `button` / `image` / `linear` / `frame` 六个简洁方法（源码：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Widgets.kt`）。它们内部走 `session.mount`，是官方推荐的挂载方式；**不需要**再引入 `mountText` / `mountEdit` / `mountButton` 之类的冗余入口。
+- key 可以直接写字符串：`ui.scope.text("title", frameParams()) { ... }` 与 `text(ViewKey("title"), frameParams()) { ... }` 命名的是同一个 key（重复 key 的冲突检查不区分两种写法）。字符串形式属于当前源码候选（`1.2.0`，未发布）；已发布的 `1.0.0` 只有 `ViewKey` 形式。
 - `ViewRef.bind(PropertySpec)` 已存在（源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Identity.kt`），是 `session.bind(ref, property)` 的纯委托简写，可直接链式调用。已发布 `1.0.0` 保证 `session.bind(ref, property)`；`ref.bind(...)` 属于当前源码候选（`1.2.0`），消费 `1.0.0` 时请用 `session.bind(...)`。
 - 常用属性优先复用 `Properties.plainText()` / `richText()` / `textColor()` / `visibility()` / `checked()`（源码：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Properties.kt`），不要一上来就手写 10 参数的 `PropertySpec`。
 

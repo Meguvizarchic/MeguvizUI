@@ -59,6 +59,69 @@ public class io.github.jichuo1.meguviz.ui.widgets.ParentScope<P extends android.
 
   public static io.github.jichuo1.meguviz.ui.ViewRef frame-FlNAiQg$default(io.github.jichuo1.meguviz.ui.widgets.ParentScope, java.lang.String, android.view.ViewGroup$LayoutParams, kotlin.jvm.functions.Function1, kotlin.jvm.functions.Function1, int, java.lang.Object);
     descriptor: (Lio/github/jichuo1/meguviz/ui/widgets/ParentScope;Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final <V extends android.view.View> io.github.jichuo1.meguviz.ui.ViewRef<V> view(java.lang.String, io.github.jichuo1.meguviz.ui.ComponentType<V>, LP, io.github.jichuo1.meguviz.ui.ViewFactory<V>, kotlin.jvm.functions.Function1<? super V, kotlin.Unit>);
+    descriptor: (Ljava/lang/String;Lio/github/jichuo1/meguviz/ui/ComponentType;Landroid/view/ViewGroup$LayoutParams;Lio/github/jichuo1/meguviz/ui/ViewFactory;Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public static io.github.jichuo1.meguviz.ui.ViewRef view$default(io.github.jichuo1.meguviz.ui.widgets.ParentScope, java.lang.String, io.github.jichuo1.meguviz.ui.ComponentType, android.view.ViewGroup$LayoutParams, io.github.jichuo1.meguviz.ui.ViewFactory, kotlin.jvm.functions.Function1, int, java.lang.Object);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/widgets/ParentScope;Ljava/lang/String;Lio/github/jichuo1/meguviz/ui/ComponentType;Landroid/view/ViewGroup$LayoutParams;Lio/github/jichuo1/meguviz/ui/ViewFactory;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.TextView> text(java.lang.String, LP, kotlin.jvm.functions.Function1<? super android.widget.TextView, kotlin.Unit>);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public static io.github.jichuo1.meguviz.ui.ViewRef text$default(io.github.jichuo1.meguviz.ui.widgets.ParentScope, java.lang.String, android.view.ViewGroup$LayoutParams, kotlin.jvm.functions.Function1, int, java.lang.Object);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/widgets/ParentScope;Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.EditText> edit(java.lang.String, LP, kotlin.jvm.functions.Function1<? super android.widget.EditText, kotlin.Unit>);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public static io.github.jichuo1.meguviz.ui.ViewRef edit$default(io.github.jichuo1.meguviz.ui.widgets.ParentScope, java.lang.String, android.view.ViewGroup$LayoutParams, kotlin.jvm.functions.Function1, int, java.lang.Object);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/widgets/ParentScope;Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.Button> button(java.lang.String, LP, kotlin.jvm.functions.Function1<? super android.widget.Button, kotlin.Unit>);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public static io.github.jichuo1.meguviz.ui.ViewRef button$default(io.github.jichuo1.meguviz.ui.widgets.ParentScope, java.lang.String, android.view.ViewGroup$LayoutParams, kotlin.jvm.functions.Function1, int, java.lang.Object);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/widgets/ParentScope;Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.ImageView> image(java.lang.String, LP, kotlin.jvm.functions.Function1<? super android.widget.ImageView, kotlin.Unit>);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public static io.github.jichuo1.meguviz.ui.ViewRef image$default(io.github.jichuo1.meguviz.ui.widgets.ParentScope, java.lang.String, android.view.ViewGroup$LayoutParams, kotlin.jvm.functions.Function1, int, java.lang.Object);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/widgets/ParentScope;Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.LinearLayout> linear(java.lang.String, LP, kotlin.jvm.functions.Function1<? super android.widget.LinearLayout, kotlin.Unit>, kotlin.jvm.functions.Function1<? super io.github.jichuo1.meguviz.ui.widgets.LinearScope, kotlin.Unit>);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public static io.github.jichuo1.meguviz.ui.ViewRef linear$default(io.github.jichuo1.meguviz.ui.widgets.ParentScope, java.lang.String, android.view.ViewGroup$LayoutParams, kotlin.jvm.functions.Function1, kotlin.jvm.functions.Function1, int, java.lang.Object);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/widgets/ParentScope;Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.FrameLayout> frame(java.lang.String, LP, kotlin.jvm.functions.Function1<? super android.widget.FrameLayout, kotlin.Unit>, kotlin.jvm.functions.Function1<? super io.github.jichuo1.meguviz.ui.widgets.FrameScope, kotlin.Unit>);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public static io.github.jichuo1.meguviz.ui.ViewRef frame$default(io.github.jichuo1.meguviz.ui.widgets.ParentScope, java.lang.String, android.view.ViewGroup$LayoutParams, kotlin.jvm.functions.Function1, kotlin.jvm.functions.Function1, int, java.lang.Object);
+    descriptor: (Lio/github/jichuo1/meguviz/ui/widgets/ParentScope;Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final <V extends android.view.View> io.github.jichuo1.meguviz.ui.ViewRef<V> view(java.lang.String, io.github.jichuo1.meguviz.ui.ComponentType<V>, LP, io.github.jichuo1.meguviz.ui.ViewFactory<V>);
+    descriptor: (Ljava/lang/String;Lio/github/jichuo1/meguviz/ui/ComponentType;Landroid/view/ViewGroup$LayoutParams;Lio/github/jichuo1/meguviz/ui/ViewFactory;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.TextView> text(java.lang.String, LP);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.EditText> edit(java.lang.String, LP);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.Button> button(java.lang.String, LP);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.ImageView> image(java.lang.String, LP);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.LinearLayout> linear(java.lang.String, LP, kotlin.jvm.functions.Function1<? super io.github.jichuo1.meguviz.ui.widgets.LinearScope, kotlin.Unit>);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/ViewRef;
+
+  public final io.github.jichuo1.meguviz.ui.ViewRef<android.widget.FrameLayout> frame(java.lang.String, LP, kotlin.jvm.functions.Function1<? super io.github.jichuo1.meguviz.ui.widgets.FrameScope, kotlin.Unit>);
+    descriptor: (Ljava/lang/String;Landroid/view/ViewGroup$LayoutParams;Lkotlin/jvm/functions/Function1;)Lio/github/jichuo1/meguviz/ui/ViewRef;
 }
 
 public final class io.github.jichuo1.meguviz.ui.BindingToken {

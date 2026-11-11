@@ -235,6 +235,19 @@ adb shell am instrument -w -e probe true -e probeRounds 30 -e probeWarmup 60 \
 - 上游失效改为推送：需要 MeguvizAndroid 新增订阅接口，不属于桥层可独立回退的改动。
 - `ui-ref-bridge` 每次调用里的两次作用域复核是有意的安全检查，保留；它与 `ui-lumen-bridge`、MeguvizDrawable 的 `RecipeBackground` 经由更便宜的 owner 检查、节点查找与令牌复用间接受益，本轮未单独测量。
 
+### 一行调用的人因修正（2026-11-11）
+
+盘点四个仓库的一行入口时发现本仓的一处断点：`getting-started.md` 写着 Java 走 `UiScopeKt.openMeguvizUi(activity)` 同样是一行，但拿到 `UiScope` 之后，`ParentScope` 上所有挂载方法的 JVM 名都带 `-`（`ViewKey` 是 value class，例如 `text-p42mYIk`），Java 源码无法调用，会话开得出来却挂不上任何控件。对照实验：把新增的 Java 正例拿去编译改动前的 `ui-widgets` AAR，`javac` 报 `找不到符号 方法 text(String,LayoutParams)`。
+
+改动只有一处：`ParentScope` 的 `view` / `text` / `edit` / `button` / `image` / `linear` / `frame` 各加一个 `String` key 的 `@JvmOverloads` 重载，把字符串包成 `ViewKey` 后委托给原方法。Kotlin 调用方也可以直接写字符串 key。
+
+- **公开描述符**：`api/public-api.txt` 新增 21 个方法（7 个完整签名、7 个 `$default`、7 个省略默认参数的重载），无删除；`verifyLegacyAbi` 通过。
+- **开销**：字节码是三次参数非空检查、一次 `ViewKey.constructor-impl`（与调用方自己写 `ViewKey("...")` 时执行的是同一个静态方法）和一次对原方法的 `invokevirtual`，没有对象分配。没有做计时测量：这是挂载路径（冷路径），多出的只是一层方法调用。
+- **门禁**：`integration/compile-fixtures/positive-java/JavaConsumer.java` 由 `javac` 针对发布的候选 AAR 编译，`verify.py` 与 `gates.py` 都把它列为必需项（没有 `javac` 时按 blocked 处理，不跳过）；Kotlin 正例加了字符串 key 的用法，四个反例照旧被编译器拒绝。
+- **未验证**：没有在设备上运行字符串 key 的挂载（`ui-widgets` 没有主机测试，行为等价来自委托本身与编译门禁）。
+
+没有做的：给 `FrameScope` / `LinearScope` 再加省略 `LayoutParams` 的形式——布局参数是有意义的决定，而且 `ParentScope` 对 `LP` 是泛型的，默认值只能逐个子类硬编码。
+
 ## 验证边界
 
 报告生成在各模块 `build/` 及根目录 `build/reports/`，不提交设备标识或运行回执。`api/*.txt` 描述本候选的 JVM 公开签名；与已发布 1.0.0 的二进制兼容另由 `api/legacy/1.0.0/` 检查（`verifyLegacyAbi`），它只证明公开 JVM 描述符没有丢失，不证明行为兼容。新增发布版本后用 `python build-logic/verification/legacy_abi.py generate --root . --version <版本> --artifacts-dir <Maven 布局的制品目录>` 生成对应基线；确需移除某个成员时，在 `api/legacy/<版本>/allowed-removals.txt` 里逐行写 `类名 :: 成员声明 # 理由`，经评审后才可提交。

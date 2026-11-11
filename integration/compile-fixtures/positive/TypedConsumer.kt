@@ -17,6 +17,10 @@ import io.github.jichuo1.meguviz.ui.widgets.openMeguvizUi
 fun title(session: UiSession, parent: LinearLayout): ViewRef<TextView> =
     LinearScope(session, parent).text(ViewKey("title"), linearParams()) { text = "Typed consumer" }
 
+/** A plain string names the same key as ViewKey; the short form needs no ViewKey import. */
+fun subtitle(session: UiSession, parent: LinearLayout): ViewRef<TextView> =
+    LinearScope(session, parent).text("subtitle", linearParams()) { text = "String key" }
+
 /** The one-line entry must stay reachable from a plain Activity with no AndroidX dependency. */
 fun openUi(activity: Activity): UiScope = activity.openMeguvizUi()
 
