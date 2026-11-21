@@ -1,5 +1,7 @@
 # 原生行布局
 
-`nativeRow` 使用成熟的 Android `LinearLayout`，默认横向，保留原生子控件、margin、baseline、RTL、焦点和无障碍语义。它不承诺减少 onMeasure 次数或提高性能。若未来针对特定几何约束实现新的布局，必须先以真实 onMeasure 和同输入设备基准证明收益，并验证几何与交互后再考虑替换。
+`meguviz-ui-layouts:1.2.0` 已发布到 Maven Central（纳入 `meguviz-bom:1.2.0`），源码构建通过 `-PenableLayouts=true` 启用。
 
-作为可选模块接入，使用与 `LinearScope` 相同的原生 LayoutParams。调用时限制初始子控件数（默认 8，允许 1–32）；超出会撤销此次受管行挂载。持有原生 View 的调用者在构建后添加子控件时仍须自行遵守该约束。真正的跨版本、字体缩放和 RTL 几何结果仍需设备验证。
+`nativeRow` 复用成熟的 Android `LinearLayout` 并强制 `orientation = LinearLayout.HORIZONTAL`，完整保留原生子控件测量、margin、baseline、RTL、焦点与无障碍语义。本模块为纯结构与约束辅助，不改变 `onMeasure` 次数或测量实现。
+
+使用时通过 `NativeRowConstraints(maxChildren)` 限制初始子节点数量（默认 `8`，允许范围 `1..32`），越界将在挂载时撤销此次行挂载；构建完成后直接操作原生子控件时仍须由调用方遵守布局约束。跨系统版本、字号缩放与 RTL 几何表现应以真机测试为准。

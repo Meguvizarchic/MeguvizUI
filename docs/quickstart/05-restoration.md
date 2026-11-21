@@ -2,14 +2,14 @@
 
 ## 职责边界
 
-`ViewRestoration` 只负责**表现层**状态：焦点、选择、滚动。业务模型（计数、草稿等）由应用自己保存；**文本永远不从 UI 快照恢复**（源码注释：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/state/ViewRestoration.kt`）。
+`ViewRestoration` 只负责**表现层**状态：焦点、选区与滚动位置。业务模型（计数、草稿等）由应用自行保存；**文本内容永远不从 UI 快照恢复**（源码：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/state/ViewRestoration.kt`）。
 
-正确顺序是：
+正确的初始化顺序：
 
-1. 先恢复权威模型（例如 `count`、`draft`）。
-2. 再挂载 View，并用模型填充。
-3. 用 `register` 登记需要恢复的 `ViewRef`。
-4. 最后 `restoreAfterLayout(root)`，在布局后恢复焦点/选择/滚动。
+1. 先恢复应用权威模型（如 `count`、`draft`）。
+2. 构建并挂载 `View`，用恢复的模型填充文本或状态。
+3. 使用 `register(path, ref, root)` 登记需要恢复表现状态的节点。
+4. 调用 `restoreAfterLayout(root)`，在布局完成后恢复焦点、选区和滚动。
 
 ## 完整示例
 
@@ -56,7 +56,7 @@ class MainActivity : Activity() {
         val title = FrameScope(session, root).text(ViewKey("count"), frameParams()) {
             text = "Count: $count"
         }
-        val binding = session.bind(title, Properties.plainText())
+        val binding = title.bind(Properties.plainText())
 
         val input = FrameScope(session, root).edit(ViewKey("draft"), frameParams()) {
             isSaveEnabled = false
@@ -66,7 +66,7 @@ class MainActivity : Activity() {
         val watcher = object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                restoration.userInteracted()          // 用户交互可撤销旧恢复
+                restoration.userInteracted()          // 用户新交互撤销旧恢复意图
                 draft = s?.toString().orEmpty()
             }
             override fun afterTextChanged(s: Editable?) = Unit
@@ -93,7 +93,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        // ViewRestoration 通过 session.onClose 自动 close，不需要单独调用。
+        // ViewRestoration 通过 session.onClose 自动关闭，无需单独调 close()。
         session.close()
         super.onDestroy()
     }
@@ -104,33 +104,32 @@ class MainActivity : Activity() {
 
 | 方法 | 作用 | 源码 |
 | --- | --- | --- |
-| `ViewRestoration(session, restored = null)` | 创建；内部用 `session.onClose { close() }` 自动关闭 | `ViewRestoration.kt` |
-| `register(path, ref, root)` | 登记 path 与 `ViewRef`，并分配稳定 id | `ViewRestoration.kt` |
-| `restoreAfterLayout(root)` | 注册全局布局监听，布局后恢复滚动/选择/焦点 | `ViewRestoration.kt` |
-| `snapshot()` | 采集当前表现状态 | `ViewRestoration.kt` |
-| `userInteracted()` | 记录用户已交互，撤销待恢复 | `ViewRestoration.kt` |
-| `RestorationSnapshot.toBundle()` / `fromBundle(bundle)` | 纯数据序列化；schema 当前为 1 | `ViewRestoration.kt` |
+| `ViewRestoration(session, restored = null)` | 构造；内部注册 `session.onClose { close() }` 自动清理 | `ViewRestoration.kt` |
+| `register(path, ref, root)` | 登记 `path` 与 `ViewRef`，分配不冲突的稳定视图 `id` | `ViewRestoration.kt` |
+| `restoreAfterLayout(root)` | 注册 `OnGlobalLayoutListener`，在首次布局后恢复滚动、选区与焦点 | `ViewRestoration.kt` |
+| `snapshot()` | 采集当前已登记节点的表现状态 | `ViewRestoration.kt` |
+| `userInteracted()` | 递增交互代际并取消尚未触发的旧恢复动作 | `ViewRestoration.kt` |
+| `RestorationSnapshot.toBundle()` / `fromBundle(bundle)` | 纯数据序列化；当前 schema 版本为 `1` | `ViewRestoration.kt` |
 
-注意：
-
-- `register` 的 `path` 是字符串路径，同一快照内重复会抛 `Duplicate restore path`。
-- 如果 View 已有原生 `id`，该 id 必须由调用方的 hierarchy restoration 管理，否则抛 `Explicit native ID must be managed by the caller's hierarchy restoration`。
-- `restoreAfterLayout` 只在 `root.isLaidOut` 后触发一次；如果期间发生新的 `userInteracted()`，旧恢复会被取消。
-- 自定义控件的私有 hierarchy state 需要专门适配，`ViewRestoration` 不负责。
+注意事项：
+- `register` 的 `path` 在同一快照内必须唯一，重复会抛出 `Duplicate restore path`。
+- 如果控件已设置原生 `view.id`，该 `id` 必须完全交由调用方的 hierarchy restoration 管理，否则抛出 `Explicit native ID must be managed by the caller's hierarchy restoration`。
+- `restoreAfterLayout` 仅在 `root.isLaidOut` 后执行一次；等待布局期间若触发 `userInteracted()`，待恢复动作会被跳过。
+- 自定义控件私有的 `hierarchy state` 需要专门的 `StateCodec` 适配，`ViewRestoration` 不自动托管。
 
 ## 常见报错
 
 | 报错 | 通常原因 | 处理 |
 | --- | --- | --- |
-| `Duplicate restore path` | 同一快照内 `register` 的 path 重复 | 换 path |
-| `Duplicate restoration node` | 保存的 Bundle 里有重复节点 | 清理旧快照或升级 schema |
-| `Unknown restoration schema` | Bundle 的 `schema` 不是 1 | 明确拒绝或迁移，不要强行解析 |
-| `Restoration node limit exceeded` | 节点数超过上限 | 减少登记数量 |
-| `Explicit native ID must be managed by the caller's hierarchy restoration` | View 已有原生 id，但未纳入调用方恢复 | 由 hierarchy restoration 管理该 id，或改用库分配的 id |
-| `Session is not active` | 会话已 close/detach/FAULTED | 检查生命周期 |
-| `View reference released` | `register`/`snapshot` 时引用已释放 | 确保注册发生在释放前 |
+| `Duplicate restore path` | 同一快照内多次登记同一 `path` | 确保每个受管节点有唯一 `path` |
+| `Duplicate restoration node` | 反序列化后的 `Bundle` 含重复节点 | 清理旧快照或核对序列化逻辑 |
+| `Unknown restoration schema` | `Bundle` 的 `schema` 不是 `1` | 显式拒绝或升级迁移，不强行解析 |
+| `Restoration node limit exceeded` | 节点数超过 `10000` 上限 | 缩减登记范围或拆分快照 |
+| `Explicit native ID must be managed by the caller's hierarchy restoration` | 视图已有非 `NO_ID` 原生 `id` 且与快照不匹配 | 移除手工 `view.id` 设置，或交由原生层级恢复管理 |
+| `Session is not active` | 会话已关闭或非活跃 | 检查生命周期 |
+| `View reference released` | `register` 或 `snapshot` 时节点已释放 | 确保在 `release` 前采集快照 |
 
 ## 下一步
 
-- [示例索引](../examples.md)：`samples/standalone` 是这份代码的完整可运行版本。
+- [示例索引](../examples.md)：`samples/standalone` 提供了上述流程的可运行完整示例。
 - [核心合同](../contracts.md) · [状态与命令](04-state-and-commands.md)

@@ -1,14 +1,23 @@
 # 独立 P2 制品消费者
 
-这个 Gradle root 只从根工程的 `build/repo` 读取 `1.0.0` Maven 制品，不引用根工程 `project()` 输出。它同时使用 widgets、UiPlan、RecyclerView、文本、原生行、预热和 KSP 生成器；release 构建启用 R8 和资源压缩。
+这个独立 Gradle 工程只从根仓库的 `build/repo` 读取 `1.2.0` Maven 制品（不引用根工程的 `project()` 源码依赖），同时集成 `widgets`、`UiPlan`、`RecyclerView`、文本预计算、`nativeRow`、预热、`SharedFrameDriver` 与 KSP 代码生成器，并在 release 构建开启 R8 混淆与资源压缩。
 
-先在根工程启用完整 P2 构建并执行 `publishCandidate`，再在根工程运行：
+## 运行步骤
+
+先在根仓库启用全部 P2 模块并发布本地制品，再执行准备脚本与独立构建：
 
 ```sh
+./gradlew -PenableP2=true verifyP2 publishCandidate --no-daemon --max-workers=2
 python samples/p2-consumer/prepare_artifacts.py
 ./gradlew -p samples/p2-consumer :app:assembleDebug :app:assembleRelease :app:lintDebug --no-daemon --max-workers=2
 ```
 
-准备脚本比较每个已发布二进制与当前模块构建输出，核验 POM 坐标，复制根工程的官方依赖校验，再将精确的当前候选哈希加入本样例自己的本地验证元数据。该生成文件和制品摘要保留在本地，重新发布候选后应重新执行。构建通过只证明独立制品接入和 R8 编译；设备交互及性能结果另行验证。
+`prepare_artifacts.py` 校验本地产物与 POM 坐标，并更新本样例的校验元数据；每次重新运行 `publishCandidate` 后都应重新执行该脚本。
 
-执行 `python samples/p2-consumer/verify_consumer.py` 可按上述步骤构建，并将非零检查数、源指纹、候选制品与输出哈希及实际构建日志写入 `build/reports/gates/p2-consumer.json`。收据的 `test_count` 为 0，因为它不冒充执行设备或自动化行为测试。
+也可以直接运行一键验证脚本：
+
+```sh
+python samples/p2-consumer/verify_consumer.py
+```
+
+脚本会将输入指纹、制品校验与构建日志写入 `build/reports/gates/p2-consumer.json`（其中 `test_count` 为 `0`，用于证明独立制品接入与 R8 编译通过，具体交互及运行性能需在设备端另行测试）。

@@ -1,6 +1,6 @@
 # DSL 与挂载作用域
 
-本文讲如何用 MeguvizUI 的声明式作用域把原生 View 挂到父容器上。**单库即可使用**：只需要 `meguviz-ui-widgets`（传递依赖 `meguviz-ui-core`），不需要 Ref、Android 桥或 Lumen。桥是可选增强，见文末与 [bridges](../bridges.md)。
+本文介绍如何用 MeguvizUI 的声明式作用域把原生 `View` 挂到父容器上。**单库即可使用**：只需 `meguviz-ui-widgets`（传递依赖 `meguviz-ui-core`），不需要 Ref、Android 桥或 Lumen。桥接扩展见[可选桥边界](../bridges.md)。
 
 ## 核心对象
 
@@ -10,8 +10,8 @@
 | `CreationEnvironment` | 保留调用方的 themed `Context` 与可选资源权威 | `ui-core/.../ui/Identity.kt` |
 | `ViewKey` | 父命名域内的稳定 key（value class） | `ui-core/.../ui/Identity.kt` |
 | `ComponentType<V>` | 组件类型标识：`id`、`viewClass`、`schema` | `ui-core/.../ui/Identity.kt` |
-| `ViewFactory<V>` | 用 `CreationEnvironment` 构造准确的 V | `ui-core/.../ui/Identity.kt` |
-| `ParentPolicy<P, LP>` | 把 child 以 LP 加到父 P 上 | `ui-core/.../ui/Identity.kt` |
+| `ViewFactory<V>` | 使用 `CreationEnvironment` 构造准确的 `V` | `ui-core/.../ui/Identity.kt` |
+| `ParentPolicy<P, LP>` | 将 child 以 `LP` 挂载到父容器 `P` | `ui-core/.../ui/Identity.kt` |
 | `ViewRef<V>` | 已挂载节点的类型化引用 | `ui-core/.../ui/Identity.kt` |
 
 最小装配：
@@ -21,11 +21,11 @@ val root = FrameLayout(activity)
 val session = UiSession(CreationEnvironment(activity))
 ```
 
-`UiSession` 的 `driver` 默认是 `ChoreographerFrameDriver()`，主线程构造。所有 View/会话 API 都在主线程执行。
+`UiSession` 默认使用 `ChoreographerFrameDriver()`，须在主线程构造；所有 View 与会话 API 均在主线程执行（异步更新和关闭入口除外）。
 
 ## ParentScope
 
-来源：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Widgets.kt`
+源码：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Widgets.kt`
 
 ```kotlin
 @UiDsl
@@ -36,27 +36,27 @@ open class ParentScope<P : ViewGroup, LP : ViewGroup.LayoutParams>(
 )
 ```
 
-`@UiDsl` 标记防止内层 receiver 在 LP 不匹配时意外落到外层父容器。泛型 `LP` 是不变的：`LinearScope` 只接受 `LinearLayout.LayoutParams`，`FrameScope` 只接受 `FrameLayout.LayoutParams`。
+`@UiDsl` 标记防止内层作用域意外调用外层父容器的方法。泛型 `LP` 是不变的：`LinearScope` 只接受 `LinearLayout.LayoutParams`，`FrameScope` 只接受 `FrameLayout.LayoutParams`。
 
-常用方法（均返回 `ViewRef<V>`）：
+常用挂载方法（均返回 `ViewRef<V>`，同时提供 `ViewKey` 与 `String` key 两种 `@JvmOverloads` 重载，供 Kotlin 与 Java 直接调用）：
 
 ```kotlin
 fun <V : View> view(key: ViewKey, type: ComponentType<V>, params: LP,
                     factory: ViewFactory<V>, configure: V.() -> Unit = {}): ViewRef<V>
 
-fun text(key: ViewKey, params: LP, configure: TextView.() -> Unit = {})
-fun edit(key: ViewKey, params: LP, configure: EditText.() -> Unit = {})
-fun button(key: ViewKey, params: LP, configure: Button.() -> Unit = {})
-fun image(key: ViewKey, params: LP, configure: ImageView.() -> Unit = {})
+fun text(key: ViewKey, params: LP, configure: TextView.() -> Unit = {}): ViewRef<TextView>
+fun edit(key: ViewKey, params: LP, configure: EditText.() -> Unit = {}): ViewRef<EditText>
+fun button(key: ViewKey, params: LP, configure: Button.() -> Unit = {}): ViewRef<Button>
+fun image(key: ViewKey, params: LP, configure: ImageView.() -> Unit = {}): ViewRef<ImageView>
 
 fun linear(key: ViewKey, params: LP, configure: LinearLayout.() -> Unit = {},
            children: LinearScope.() -> Unit): ViewRef<LinearLayout>
 
 fun frame(key: ViewKey, params: LP, configure: FrameLayout.() -> Unit = {},
-           children: FrameScope.() -> Unit): ViewRef<FrameLayout>
+          children: FrameScope.() -> Unit): ViewRef<FrameLayout>
 ```
 
-`linear`/`frame` 先挂载容器，再在对应子作用域里执行 `children`；子作用域抛错时会 `session.release(ref)` 回滚本次容器挂载。`children` 没有默认值，必须显式给出。
+`linear` / `frame` 先挂载容器节点，再在对应子作用域中执行 `children`；若 `children` 抛出异常，会自动调用 `session.release(ref)` 回滚本次容器挂载。`children` 没有默认值，必须显式传入。
 
 `Framework` 提供预置 `ComponentType` 与 `ViewFactory`：
 
@@ -68,7 +68,7 @@ object Framework {
 }
 ```
 
-`Framework.text` 的 `ComponentType("framework.text", TextView::class.java)` 与 `textFactory` 是分开的两个成员。`scroll` 没有对应的 `ParentScope.scroll` 简写，需要走通用 `view(key, Framework.scroll, params, Framework.scrollFactory)`。
+`Framework.scroll` 没有对应的 `ParentScope.scroll` 简写，须调用 `view(key, Framework.scroll, params, Framework.scrollFactory)`。
 
 ## FrameScope 与 LinearScope
 
@@ -80,20 +80,20 @@ class FrameScope(session: UiSession, parent: FrameLayout) :
     ParentScope<FrameLayout, FrameLayout.LayoutParams>(session, parent, FramePolicy)
 ```
 
-`LinearPolicy`、`FramePolicy`、`ScrollPolicy` 是 `ParentPolicy` 的单例实现。`FrameScope` 的 LP 是 `FrameLayout.LayoutParams`，因此 `frameParams()` 适用；`LinearScope` 用 `linearParams()`。
+`LinearPolicy`、`FramePolicy`、`ScrollPolicy` 为 `ParentPolicy` 的单例实现。`FrameScope` 搭配 `frameParams()`，`LinearScope` 搭配 `linearParams()`。
 
-典型嵌套：
+典型嵌套示例：
 
 ```kotlin
 val root = FrameLayout(activity)
 val session = UiSession(CreationEnvironment(activity))
-FrameScope(session, root).linear(ViewKey("counter"), frameParams(), configure = {
+FrameScope(session, root).linear("counter", frameParams(), configure = {
     orientation = LinearLayout.VERTICAL
     val padding = Dp(24f).pixels(context)
     setPadding(padding, padding, padding, padding)
 }) {
-    val title = text(ViewKey("count"), linearParams()) { text = "0" }
-    val increment = button(ViewKey("increment"), linearParams()) { text = "+" }
+    val title = text("count", linearParams()) { text = "0" }
+    val increment = button("increment", linearParams()) { text = "+" }
 }
 ```
 
@@ -110,7 +110,7 @@ fun frameParams(width: Int = MatchParent, height: Int = WrapContent,
                 configure: FrameLayout.LayoutParams.() -> Unit = {}): FrameLayout.LayoutParams
 ```
 
-`Dp`/`Sp` 是值类型，按当前 `Context` 的 `displayMetrics` 换算：
+`Dp` / `Sp` 是值类型，按当前 `Context` 的 `displayMetrics` 换算：
 
 ```kotlin
 @JvmInline value class Dp(val value: Float) {
@@ -121,13 +121,13 @@ fun frameParams(width: Int = MatchParent, height: Int = WrapContent,
 }
 ```
 
-注意 `configure` 里若覆盖 `orientation`，`linear` 不会替你强制竖直；需要横排请用 `nativeRow` 或自行设置。
+> `linear` 不会在 `configure` 里替你强制竖直方向；横向排布可使用 `nativeRow` 或自行设置 `orientation = LinearLayout.HORIZONTAL`。
 
-## nativeRow（可选 ui-layouts）
+## `nativeRow`（可选 `ui-layouts`）
 
-`nativeRow` 属于可选模块 `ui-layouts`，需要 Gradle 属性 `enableLayouts=true` 才会加入构建（见 `settings.gradle.kts`）。不启用时单库 DSL 完全不受影响。
+`nativeRow` 属于已发布的 `meguviz-ui-layouts:1.2.0`（源码构建需启用 `-PenableLayouts=true`）。
 
-来源：`ui-layouts/src/main/kotlin/io/github/jichuo1/meguviz/ui/layouts/NativeRow.kt`
+源码：`ui-layouts/src/main/kotlin/io/github/jichuo1/meguviz/ui/layouts/NativeRow.kt`
 
 ```kotlin
 data class NativeRowConstraints(val maxChildren: Int = 8) {
@@ -143,18 +143,18 @@ fun <P : ViewGroup, LP : ViewGroup.LayoutParams> ParentScope<P, LP>.nativeRow(
 ): ViewRef<LinearLayout>
 ```
 
-它复用 `linear`，强制 `orientation == LinearLayout.HORIZONTAL`，并在 `children` 执行完后用 `constraints.checkChildCount(parent.childCount)` 校验子节点数。`maxChildren` 限定在 1..32。它不改变测量实现，也不宣称性能收益；原生横向行仍由 `LinearLayout` 负责测量、基线、RTL、焦点与无障碍。
+它复用 `linear`、强制 `orientation == LinearLayout.HORIZONTAL`，并在 `children` 执行后检查 `constraints.checkChildCount(parent.childCount)`（`maxChildren` 范围为 `1..32`）。原生横向行仍由 `LinearLayout` 负责测量、基线、RTL、焦点与无障碍语义，不改变测量实现。
 
 ```kotlin
 FrameScope(session, root).nativeRow(ViewKey("row"), frameParams()) {
-    text(ViewKey("label"), linearParams()) { text = "Label" }
-    button(ViewKey("action"), linearParams()) { text = "Go" }
+    text("label", linearParams()) { text = "Label" }
+    button("action", linearParams()) { text = "Go" }
 }
 ```
 
 ## key 的语义
 
-`ViewKey` 是父命名域内的 key，不是全局唯一：
+`ViewKey` 作用域归属当前父容器，而非全局唯一：
 
 ```kotlin
 @JvmInline value class ViewKey(val value: String) {
@@ -162,26 +162,26 @@ FrameScope(session, root).nativeRow(ViewKey("row"), frameParams()) {
 }
 ```
 
-- 同一父下重复 key 在构造前拒绝：`Duplicate key in parent: <value>`。
-- 不同父下可以重用同一 key。
-- 同 key 改类型需先显式 `session.release(ref)` 再重建，不提供隐式树 reconcile。
-- `borrow` 一个没有父的 View 时，会检查所有根节点是否有同 key：`Duplicate root key: <value>`。
+- 同一父容器下重复 key 在构造前即被拒绝：`Duplicate key in parent: <value>`。
+- 不同父容器下可以复用同一 key；`"title"` 字符串形式与 `ViewKey("title")` 指向同一 key。
+- 同一 key 更换组件类型须先显式 `session.release(ref)` 再挂载，不提供隐式通用树 diff/reconcile。
+- `borrow` 无 parent 的根 View 时，若已有同 key 的根节点则抛出 `Duplicate root key: <value>`。
 
-挂载顺序是：预留 key → 工厂构造 → `configure` → `policy.attach` → 登记 `ViewRef`。工厂返回的 View 必须尚未挂载且未被本 session 管理，否则拒绝；已有外部 parent 的 View 不会被自动拆走。
+挂载顺序为：占用 key → 工厂创建 → `configure` → `policy.attach` → 登记 `ViewRef`。工厂返回的 View 必须尚未挂载且未被当前会话管理；已有外部 `parent` 的 View 不会被自动拆走。
 
 ## 常见错误
 
 | 错误 | 现象 | 处理 |
 | --- | --- | --- |
-| 把 `frameParams()` 传进 `LinearScope` | 编译期 LP 类型不匹配 | 用 `linearParams()` |
-| 同父重复 `ViewKey` | `IllegalStateException: Duplicate key in parent` | 换 key 或先 `release` |
-| 工厂返回已挂载 View | `Factory returned an already parented View` | 改用 `borrow`/`transfer` |
-| 在 `children` 里引用外层 `ParentScope` | `@UiDsl` 编译期拦截 | 用内层作用域的方法 |
+| 将 `frameParams()` 传入 `LinearScope` | 编译期 LP 类型不匹配 | 改用 `linearParams()` |
+| 同父重复 `ViewKey` | `IllegalStateException: Duplicate key in parent` | 更换 key 或先 `release` |
+| 工厂返回已有 parent 的 View | `Factory returned an already parented View` | 复用既有视图改用 `borrow` / `transfer` |
+| 在 `children` 内引用外层作用域 | `@UiDsl` 编译期拦截 | 使用内层作用域方法 |
 
 ## 来源
 
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/UiSession.kt`
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Identity.kt`
 - `ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/Widgets.kt`
-- `ui-layouts/src/main/kotlin/io/github/jichuo1/meguviz/ui/layouts/NativeRow.kt`（可选模块）
+- `ui-layouts/src/main/kotlin/io/github/jichuo1/meguviz/ui/layouts/NativeRow.kt`
 - 可编译样例：`samples/standalone/src/main/kotlin/io/github/jichuo1/meguviz/samples/standalone/MainActivity.kt`

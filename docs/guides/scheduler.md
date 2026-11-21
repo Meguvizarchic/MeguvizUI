@@ -1,11 +1,11 @@
 # 调度器、帧驱动与背压
 
-本文讲 `UiScheduler` 的容量、准入、帧预算与背压语义。**单库即可使用**：调度器属于 `ui-core`，不需要任何桥。
+本文介绍 `UiScheduler` 的容量控制、入队语义、帧预算与跨线程提交机制。**单库即可使用**：调度器位于 `ui-core`，不依赖任何桥接模块。
 
-## 两个角色
+## 两个基础角色
 
 ```kotlin
-// 唯一、不可替换的帧驱动；方法在其 owner 线程执行
+// 唯一且不可替换的帧驱动；方法在所属 owner 线程执行
 interface UiFrameDriver {
     val owner: String
     fun requestFrame(callback: (FrameBudget) -> Unit): FrameTicket
@@ -14,20 +14,13 @@ interface UiFrameDriver {
 fun interface FrameTicket { fun cancel() }
 ```
 
-`requestFrame` 必须**异步**投递一次机会，绝不能同步调用 callback；内联回调会让调度器进入 `FAULTED`。来源：`ui-core/.../scheduler/UiFrameDriver.kt`。
+`requestFrame` 必须**异步**投递一次帧机会，绝不能在调用栈内同步调用 `callback`；同步回调会让调度器进入 `FAULTED`。源码：`ui-core/.../scheduler/UiFrameDriver.kt`。
 
-默认驱动：
+默认平台驱动为 `ChoreographerFrameDriver`（`owner = "android.choreographer"`）：
+- API `33+` 使用 `Choreographer.postVsyncCallback`，在回调中**立即复制** `frameTimeNanos` 与 `preferredFrameTimeline.deadlineNanos`，生成 `FrameBudget(deadlineNanos = ..., estimated = false)`。
+- API `<= 32` 使用 `postFrameCallback`，生成 `deadlineNanos = null`、`estimated = true`，调度器仅使用固定工作预算。
 
-```kotlin
-class ChoreographerFrameDriver : UiFrameDriver {
-    override val owner: String = "android.choreographer"
-}
-```
-
-- API 33+ 走 `Choreographer.postVsyncCallback`，在回调内**立即复制** `frameTimeNanos` 与 `preferredFrameTimeline.deadlineNanos`，构造 `FrameBudget(deadlineNanos=…, estimated=false)`。
-- API ≤ 32 走 `postFrameCallback`，`deadlineNanos=null`、`estimated=true`，调度器只用固定预算。
-
-`FrameBudget` 是纯数据，不持有平台 callback：
+`FrameBudget` 是纯数据对象，不持有任何平台回调引用：
 
 ```kotlin
 data class FrameBudget(
@@ -38,9 +31,9 @@ data class FrameBudget(
 )
 ```
 
-`estimated` 表示 deadline 是否未知/仅估计。构造期 fail-closed：`estimated=false` 必须有非空 `deadlineNanos`，否则抛错。
+构造约束：`estimated = false` 时必须提供非空 `deadlineNanos`，否则立即抛出 `IllegalArgumentException`。
 
-## UiScheduler 构造参数
+## `UiScheduler` 构造参数
 
 ```kotlin
 class UiScheduler(
@@ -54,25 +47,16 @@ class UiScheduler(
     private val dispatcher: OwnerThreadDispatcher? = null,
 ) : AutoCloseable
 
-/** 与 MeguvizAndroid 的 OwnerDispatcher.post 同形，但重新声明在本模块内，不引入兄弟库依赖。 */
 fun interface OwnerThreadDispatcher {
     fun post(callback: Runnable): Boolean
 }
 ```
 
-另有一个**只含前 7 个参数的次级构造器**，内部以 `dispatcher = null` 委托——它是 1.2.0 之前存在的签名，保留下来让旧的二进制调用方继续链接。它声明了与主构造器相同的默认值，这是有意的：省略尾部参数的 Kotlin 调用被编译成合成的默认参数构造器，只有带默认值的 7 参构造器才会生成它。两处默认值必须保持一致。
+调度器同时保留了不含 `dispatcher` 的 **7 参次级构造器**（内部以 `dispatcher = null` 委托，并带有完全相同的默认值），确保以 `1.0.0` 编译的旧调用方可以直接链接运行。
 
-`dispatcher` 为 `null` 时（默认）调度器保持纯 owner 线程独占，`submitStateAsync` / `submitCommandAsync` 一律返回 `Rejected(CLOSED)`；同步入口的行为与 1.2.0 之前完全一致。`UiSession` 会把主 `Handler` 装进去，因此用 `UiSession` 时异步入口默认可用。
+当 `dispatcher` 为 `null` 时，异步提交入口（`submitStateAsync` / `submitCommandAsync`）一律返回 `Rejected(CLOSED)`；`UiSession` 默认会装配基于主 `Handler` 的派发器，因此通过 `UiSession` 使用时异步提交默认可用。
 
-来源：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/UiScheduler.kt`。
-
-`UiSession` 在构造时创建唯一的 scheduler，并通过 `session.scheduler` 暴露：
-
-```kotlin
-val scheduler = UiScheduler(driver, ::assertOwner)
-```
-
-`assertOwner` 由装配层提供，通常就是 `UiSession::assertOwner`（主线程检查）。普通属性写入不需要直接碰 scheduler，走 `PropertyBinding.submit` 即可；直接 scheduler 只用于非属性的命令/状态场景。
+常规属性写入只需通过 `PropertyBinding.submit`；只有非属性命令、一次性操作或跨节点协调才需要直接调用 `session.scheduler`。
 
 ## 提交入口
 
@@ -84,74 +68,70 @@ fun submitBatch(operations: List<ScheduledOperation>): SubmitResult
 fun submitBatch(vararg operations: ScheduledOperation): SubmitResult
 ```
 
-配套类型：
+配套类型（均在 `io.github.jichuo1.meguviz.ui.scheduler` 包下）：
 
 ```kotlin
 data class StateSlot(val binding: Any, val property: Any)
 class StateUpdate(val slot: Any, val isValid: () -> Boolean = { true }, val action: () -> Unit)
-class ScheduledOperation(val label: String = "operation",
-                         val isValid: () -> Boolean = { true },
-                         val action: () -> Unit)
+class ScheduledOperation(
+    val label: String = "operation",
+    val isValid: () -> Boolean = { true },
+    val action: () -> Unit,
+)
 ```
 
-### 状态通道与命令通道
+### 状态通道 vs 命令通道
 
-- **状态通道**（`submitState`/`submitStates`）：按 slot 合并，同槽 pending 值可被覆盖，满容量时只允许覆盖既有 key。返回 `Coalesced` 表示复写了已排队槽，`Accepted` 表示有新增槽。
-- **命令通道**（`submitCommand`/`submitBatch`）：FIFO，保留调用次数。批次整体准入或拒绝，批内保持相对顺序，但**不是事务**，失败前的副作用已经发生。
+- **状态通道**（`submitState` / `submitStates`）：按 `slot` 合并，尚未执行时同槽后值直接覆盖前值，满容量时允许覆盖既有槽位，仅拒绝未排队的新槽。返回 `Coalesced` 表示命中既有槽，`Accepted` 表示有新槽入队。
+- **命令通道**（`submitCommand` / `submitBatch`）：按 FIFO 保留全部调用次数。批次整体入队或整体拒绝，批内保持相对顺序，但**不是事务**，出错前已执行的副作用不会回滚。
 
-两个通道之间没有提交时的隐含全序；需要跨属性/命令的因果顺序时用 `submitBatch`。
+两个通道之间不存在提交时刻的全局先后顺序；需要跨状态与命令的严格先后顺序时使用 `submitBatch`。
 
-### submitStates：同语义集合
+### `submitStates`：同语义集合更新
 
 ```kotlin
-val slotTitle = Any()
-val slotButton = Any()
+val slotTitle = StateSlot(titleRef, "text")
+val slotButton = StateSlot(buttonRef, "text")
 val result = session.scheduler.submitStates(
     listOf(
-        StateUpdate(slotTitle) { println("A") },
-        StateUpdate(slotButton) { println("B") },
+        StateUpdate(slotTitle) { titleRef.get().text = "A" },
+        StateUpdate(slotButton) { buttonRef.get().text = "B" },
     ),
 )
 ```
 
-语义：一次 owner 校验、一次帧请求、批内按 slot 去重。准入逐条进行，与按顺序调用 `submitState` 完全等价；超出 `stateCapacity` 时前面的条目已入队，不会回滚。同一 slot 的最后一条生效。全部命中已排队槽时返回 `Coalesced`，有新增槽时返回 `Accepted`。
+行为规则：执行一次 owner 线程检查和一次帧请求，在批内按 `slot` 去重（同槽最后一条生效）；逐条检查与顺序调用 `submitState` 等价，遇到 `STATE_CAPACITY` 时前序已入队条目保留在队列中。
 
-`submitBatch` 的 vararg 重载与 `List` 版本契约相同，属于当前源码改动，**尚未发布**；已发布 1.0.0 使用 `listOf(...)` 形式。两种入口都会复制输入数组，调用方准入后修改 vararg 数组不会改变队列。
+`submitBatch(vararg operations: ScheduledOperation)` 与 `List` 重载具有相同的入队与数组快照拷贝语义。
 
 ### 跨线程提交（异步入口）
 
-后台线程不要自己 `Handler.post { submitState(...) }`：N 次更新就是 N 次主线程派发。用异步入口，N 次更新只产生 **1 次 owner 派发 + 1 次合并**。
+后台线程不应频繁自行调用 `Handler.post { submitState(...) }`，否则 N 次更新会产生 N 次主线程派发开销。改用异步入口后，N 次后台更新只产生 **1 次 owner 派发 + 1 次帧内合并**：
 
 ```kotlin
 fun submitStateAsync(slot: Any, isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult
 fun submitCommandAsync(isValid: () -> Boolean = { true }, action: () -> Unit): SubmitResult
 ```
 
-`UiSession` 上有一致的同名入口（`ui.submitStateAsync(...)`），内部用主 `Handler` 作派发器。
+`UiSession` 也暴露了同名方法（`uiSession.submitStateAsync(...)` / `submitCommandAsync(...)`）：
 
-语义：
+- **非阻塞写入**：后台线程仅加锁写入有界 handoff 缓存并立即返回，同槽状态在 handoff 阶段就已完成原地折叠合并。
+- **有界容量**：handoff 上限与 `stateCapacity` / `commandCapacity` 相同，超限拒绝与同步入口一致。
+- **帧开头合并**：`drain()` 起始将暂存更新并入本帧队列（`mergeHandoff`）；若当前主线程队列暂满，剩余被接受项继续留在 handoff 等待后续帧空位，不会静默丢失。
+- **线程归属安全**：`isValid` 与 `action` 始终只在 owner 主线程运行，后台不触碰 `View`。
+- **派发拒绝一致性**：若派发器拒绝本次投递，调度器仅回滚未被 owner 取走的该条目并返回 `Rejected(CLOSED)`；若 owner 在此期间已将其并入队列执行，则返回原本的 `Accepted` / `Coalesced`，确保返回值与实际执行严格对齐。当派发器恢复后，异步入口自动重新可用；若需要保证极端退出场景下的必达性，请采用同步入口或业务侧可靠队列。
 
-- **不阻塞**：后台线程只做一次加锁的 handoff 写入，立刻返回。
-- **有界**：handoff 上界就是 `stateCapacity` / `commandCapacity`；满时对新槽返回 `STATE_CAPACITY` / `COMMAND_CAPACITY`（与同步入口同一个 `RejectionReason`）。
-- **同槽合并**：handoff 阶段就按 slot 复用条目，所以同一热槽的 N 次后台提交在合并前已塌缩成一条。
-- **帧内合并**：`drain()` 开头把暂存工作并入本帧；装不下的留在 handoff，等队列腾出位置后的下一次 merge——**被接受的更新不会被丢弃**。
-- **拒绝语义与同步入口一致**：PAUSED / FAULTED / CLOSED 返回相同原因；未装配派发器时（`UiScheduler` 直接构造且 `dispatcher = null`）返回 `CLOSED`。
-- **动作始终在 owner 线程执行**：`isValid` 与 `action` 都不会在调用方线程跑。
-- **派发器拒绝时**：返回 `CLOSED`，只回滚本次暂存（同槽合并按条目版本号判定，不会抹掉并发生产者后写入的值），其他生产者的接受/拒绝诊断按增量保留；残留条目会补发一次派发。若 owner 在本次暂存之后、拒绝被观察到之前已经合并过 handoff（条目已移入 owner 队列，甚至已执行），则无法也不应回滚：返回原本的 `Accepted` / `Coalesced`，该次提交照常执行——「返回 `Rejected` 就一定不执行、返回接受就一定会执行」始终成立（`RefusedDispatchAfterMergeTest` 锁定）。连补发也被拒绝时条目仍留在 handoff，等下一次成功派发或下一次帧合并（`drain` 开头会 merge）取走；**没有永久终止标志**，派发器恢复后异步入口立即可用。派发器持续不可用时，已返回 `Accepted` 的条目可能一直不执行——异步入口不能承载必须送达的工作，需要送达请用同步入口或自建可靠队列。
+> **成本说明**：不同槽位的高并发异步突发会比主线程同步路径多一次 handoff 映射操作；对于同一热门槽位的频繁更新，由于复用内部 `StateEntry`，分配接近零。该机制的核心收益是大幅减少跨线程 `Handler` 派发次数。
 
-成本要清楚：不同槽位的突发比同步路径多一倍 map 操作（handoff 插入 + 合并插入）。host 探针实测（N=256）：不同槽位 16,457 → 34,968 B/轮；同一槽位 152 → 240 B/轮。**收益是 owner 派发次数，不是分配**——单线程探针测不出派发成本。
-
-派发器是可选构造参数，默认 `null`：不装配时 `UiScheduler` 保持纯 owner 线程独占，同步路径一行未变，`submit*Async` 一律返回 `CLOSED`。`UiSession` 总是装配主 `Handler`，所以用 `UiSession` 时异步入口默认可用。
-
-### StateSlot 与公平轮转
+### `StateSlot` 与公平轮转
 
 ```kotlin
 data class StateSlot(val binding: Any, val property: Any)
 ```
 
-`binding` 相同的 slot 归入同一组，各活跃组轮转后才处理下一属性；一个拥有很多属性的节点不会挤占其他节点的全部机会。普通 `Any` slot 也可用，其自身就是独立公平组。key 必须在排队期间保持稳定相等语义。
+相同 `binding` 的状态槽自动归为同一组；同一帧内各活跃组按轮转顺序依次消费，避免单个拥有大量属性的控件挤占其余控件的更新机会。传入普通 `Any` 作为 `slot` 时，每个键自身独立成为一个分组；任何 `slot` 在排队期间必须保持稳定的 `equals` / `hashCode` 语义。
 
-## 容量与拒绝
+## 容量与背压拒绝
 
 ```kotlin
 enum class SchedulerState { ACTIVE, PAUSED, FAULTED, CLOSED }
@@ -164,75 +144,44 @@ sealed class SubmitResult {
 }
 ```
 
-- 状态容量按**槽**计算，包括当前帧尚未处理的快照；新槽超容时拒绝 `STATE_CAPACITY`，覆盖已有槽不受限。
-- 命令容量按**操作数**计算（批次按 item 数）；超容拒绝 `COMMAND_CAPACITY`。
-- `PAUSED`、`FAULTED`、`CLOSED` 状态下新提交一律拒绝，拒绝原因对应枚举。
-- 空批次/空 `submitStates` 拒绝 `EMPTY_BATCH`。
+- 状态容量按**不同槽位数量**计数（含当前帧尚未处理的快照），命令容量按**操作项数量**计数（批次按展开后项数计）。
+- 调度器处于 `PAUSED`、`FAULTED` 或 `CLOSED` 时拒绝全部新提交；空集合 / 空批次返回 `EMPTY_BATCH`。
+- **背压原则**：队列有界是有意设计，切勿把容量设为无限来掩盖更新过载。调用方应检查 `SubmitResult`，根据 `reason` 决定丢弃、节流或重建。
 
-**背压原则**：队列有界是特性，不要为了消除拒绝把队列扩成无界。调用方必须检查 `SubmitResult`，按 `reason` 决定丢弃、重试或重建。状态通道只适合允许丢弃中间值的状态；必须保留次数的业务操作走命令通道。
+## 帧内 `drain` 与工作预算
 
-## 帧内 drain 与预算
+每帧回调触发时，调度器先冻结本帧快照（帧回调执行过程中新提交的更新将在下一帧处理），受以下边界控制：
 
-每帧开始时调度器冻结状态与命令队列，本轮回调重入提交的工作只在下一帧可见。每帧限制：
-
-- 最多 `maxOperationsPerFrame` 个操作；
-- 状态与命令都有工作时交替取一项（`preferState` 轮转）；
+- 单帧最多执行 `maxOperationsPerFrame`（默认 `64`）个操作；
+- 状态队列与命令队列同时非空时通过 `preferState` 交替执行；
 - 单调时间预算：
-  - `estimated=false`（平台给了真实 deadline）：`min(maxFrameWorkNanos, deadline - started - 1_000_000)`，为 traversal/draw 留 1ms 尾部；
-  - `estimated=true`（deadline 未知或仅估计）：只用 `maxFrameWorkNanos`。
+  - `estimated = false`（平台给出真实 deadline）：取 `min(maxFrameWorkNanos, deadline - started - 1_000_000)`，为 traversal/draw 预留 `1ms` 尾部；
+  - `estimated = true`（deadline 未知或估计）：仅采用 `maxFrameWorkNanos`（默认 `2ms`）。
 
-预算只限制操作边界，不承诺单个 setter 的最长耗时。帧末把未处理项合并回队列，组轮转位置跨帧保留。
-
-每个操作执行前立即复核 `isValid`；过期则释放而不写入（计入 `staleOperations`）。验证器或 action 抛异常会记录 `SchedulerFailure`，默认进入 `FAULTED` 并清空队列；`Error` 会原样抛出。
+时间预算在操作边界检查，不中断单个执行中的 setter。每个操作运行前即时复核 `isValid`；无效条目直接释放（计入 `staleOperations`）。若校验器或 `action` 抛出异常，调度器记录 `SchedulerFailure`，切入 `FAULTED` 并清空待处理队列（`Error` 会继续向上抛出）。
 
 ## 暂停、恢复、清理与关闭
 
 ```kotlin
-fun pause(clearPending: Boolean = true)   // detach 默认行为；clearPending=false 保留队列
-fun resume()                              // 只能从 PAUSED 恢复
-fun recover()                             // 只能从 FAULTED 恢复；不重试失败操作
-fun discardInvalid()                      // 物理释放失效的待处理项，不执行 action
+fun pause(clearPending: Boolean = true)   // detach 默认清空队列；clearPending = false 时保留
+fun resume()                              // 仅从 PAUSED 恢复为 ACTIVE
+fun recover()                             // 仅从 FAULTED 恢复；不重试此前失败的操作
+fun discardInvalid()                      // 移除并释放已失效的待处理项，不执行 action
 override fun close()
 ```
 
-- `pause()` 默认清空队列并取消帧票据；`pause(clearPending=false)` 才保留队列。
-- `recover()` 要求调用者先核对或重建实际状态；失败操作不会被重试。
-- `discardInvalid()` 用于节点释放、`rebind`、属性绑定 `close` 后的清理；它只复核 validity、移除失效项、释放容量。
-- `close()` 先置 `CLOSED`、使票据失效，再尽力取消物理帧并释放所有待处理闭包。已进入的用户回调不可抢占。
+- `recover()` 要求调用方先手动核对或重建真实的 `View` 与业务状态。
+- `discardInvalid()` 在 `rebind`、节点释放与绑定关闭后触发，清理失效闭包并释放占用容量。
+- `close()` 置为 `CLOSED`、取消待处理帧票据并释放全部队列引用，不抢占已经进入的用户回调。
 
 ## 可观测性
 
-```kotlin
-val state: SchedulerState            // private set
-val failure: SchedulerFailure?       // private set
-val cancellationFailure: String?     // private set
-val pendingStateCount: Int
-val pendingCommandCount: Int
-val counters: SchedulerCounters
-val driverOwner: String
-```
+`UiScheduler` 提供只读状态与统计计数：
+- `state: SchedulerState`、`failure: SchedulerFailure?`、`cancellationFailure: String?`
+- `pendingStateCount: Int`、`pendingCommandCount: Int`、`driverOwner: String`
+- `counters: SchedulerCounters`（包含 `acceptedSubmissions`、`coalescedStates`、`appliedOperations`、`staleOperations`、`releasedOperations`、`rejectedSubmissions`、`requestedFrames`、`drainedFrames`）
 
-```kotlin
-data class SchedulerCounters(
-    val acceptedSubmissions: Long,
-    val coalescedStates: Long,
-    val appliedOperations: Long,
-    val staleOperations: Long,
-    val releasedOperations: Long,
-    val rejectedSubmissions: Long,
-    val requestedFrames: Long,
-    val drainedFrames: Long,
-)
-```
-
-`appliedOperations` 不等同于原生 setter 接受次数；属性层另有 `writes`/`skips`。`failure` 只保存异常类型与消息文本，不持有 `Throwable`/receiver。
-
-## 调参建议
-
-- `stateCapacity`/`commandCapacity` 是背压阈值，按页面最大并发属性/命令数留余量，不要直接设成无限。
-- `maxOperationsPerFrame` 控制单帧操作数上限；超出的操作留在队列进入下一帧。
-- `maxFrameWorkNanos` 是固定预算上限；API 33+ 的真实 deadline 会进一步收窄它。
-- 后台线程只计算脱离 View/Context 的结果，不要直接调用 UI setter。跨线程提交请用[跨线程提交（异步入口）](#跨线程提交异步入口)里的 `submitStateAsync` / `submitCommandAsync`：后台线程只写入有界 handoff，一次 owner 派发服务整批更新。业务自行 `Handler.post` 再调同步入口会让 N 次更新产生 N 次主线程派发。
+`failure` 仅保留异常类名与消息文本，不长期持有 `Throwable` 或外部对象引用。
 
 ## 来源
 
@@ -240,5 +189,4 @@ data class SchedulerCounters(
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/UiFrameDriver.kt`
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/ChoreographerFrameDriver.kt`
 - `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/StateUpdate.kt`
-- `ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Properties.kt`（`PropertyBinding.submit` 的通道选择）
-- 合同与历史：`docs/contracts.md`、`docs/development.md`（调度器专项测量）
+- [核心合同](../contracts.md) · [构建、验证与贡献](../development.md)

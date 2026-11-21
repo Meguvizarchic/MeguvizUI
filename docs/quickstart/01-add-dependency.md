@@ -1,86 +1,97 @@
 # 01 · 添加依赖
 
-## 版本选择
+## 版本与 BOM（`1.2.0`）
 
-- **已发布版本：`1.0.0`**，位于 Maven Central，groupId 为 `io.github.jichuo1.meguviz`（见 [安装与接入](../installation.md)）。
-- **源码版本：`1.2.0`**（`gradle.properties` 中 `meguviz.version=1.2.0`），尚未发布到 Maven Central；只能通过源码构建出的本地候选仓库 `build/repo/` 消费。
-- `meguviz-ui-android-bridge` 的上游 1.2.0 尚未发布到 Maven Central，`meguviz-ui-lumen-bridge` 依赖 JitPack 上的 Lumen 1.5.5，因此这两个桥**不在 Central 提供**，只能用源码构建并显式启用（`-PenableLumen=true` / `-PenableAndroid=true`）。
+- **Maven Central 已发布版本**：`1.2.0`（groupId 为 `io.github.jichuo1.meguviz`）。
+- **家族 BOM**：`io.github.jichuo1.meguviz:meguviz-bom:1.2.0` 已同步发布到 Maven Central，集中对齐 MeguvizUI 的 12 个已发布 `1.2.0` 制品及家族其他库。
+- **未上 Central 的唯一例外**：`meguviz-ui-lumen-bridge` 尚未发布到 Maven Central，仅可源码构建启用 `-PenableLumen=true` 并通过本地 Maven 消费（参见 [Lumen 桥接指南](../guides/bridges-lumen.md)）。
 
-写依赖时请确认你引用的是 `1.0.0`（已发布）还是本地候选；不要写 `1.2.0` 到 Maven Central 的坐标上。
-跨库联调时可以用家族的 BOM `io.github.jichuo1.meguviz:meguviz-bom:1.2.0`，它把 1.2.0 批次的各个制品对齐到一个坐标（源码在 [MeguvizBom](https://github.com/Meguvizarchic/MeguvizBom)）。它要等所有成员都以 1.2.0 上了 Central 才发布，**目前不在 Maven Central**；在那之前只能在 MeguvizBom 仓库里 `./gradlew publishBomPublicationToMavenLocal` 得到本地版本，再让消费工程解析 `mavenLocal()`。之后
-`implementation(platform("io.github.jichuo1.meguviz:meguviz-bom:1.2.0"))`，家族坐标即可省略版本号。普通应用请直接使用下面的 Central `1.0.0`。
+> 环境底线：`compileSdk 37+`、`minSdk 27`、JDK `17`、Kotlin `2.3+`（库源码以 `2.4.21` 编译）。
 
-## 普通应用：Maven Central
+## 常规应用：通过 BOM 接入 Maven Central
+
+在消费模块的 `build.gradle.kts` 中启用 `google()` 与 `mavenCentral()` 后引入 BOM 与 `meguviz-ui-widgets`（它通过 `api` 传递依赖 `meguviz-ui-core`）：
 
 ```kotlin
-// 消费模块的 build.gradle.kts
 dependencies {
-    implementation("io.github.jichuo1.meguviz:meguviz-ui-widgets:1.0.0")
+    val meguvizBom = platform("io.github.jichuo1.meguviz:meguviz-bom:1.2.0")
+    implementation(meguvizBom)
+    implementation("io.github.jichuo1.meguviz:meguviz-ui-widgets")
 }
 ```
 
-`meguviz-ui-widgets` 通过 `api(project(":ui-core"))` 传递依赖核心（见 `ui-widgets/build.gradle.kts`），所以不需要单独写 `meguviz-ui-core`。
+如果不使用 BOM，也可以在每条依赖末尾显式写出 `:1.2.0` 版本号。
 
-已发布的 artifactId：
+### 已发布到 Maven Central 的 12 个制品
 
 | artifactId | 用途 |
 | --- | --- |
-| `meguviz-ui-core` | 会话、引用、属性、调度、恢复与扩展合同 |
-| `meguviz-ui-widgets` | Framework 工厂、父布局作用域、尺寸与常用属性 |
-| `meguviz-ui-ref-bridge` | 对接真实 Ref 构造与调用计划 |
-| `meguviz-ui-plan` | 纯数据计划（P2） |
-| `meguviz-ui-recycler` | 可选 RecyclerView 绑定（P2） |
-| `meguviz-ui-text` | 长文本预计算（P2） |
-| `meguviz-ui-layouts` | 受限原生横向行（P2） |
-| `meguviz-ui-prewarm` | 可取消的有界主线程预热（P2） |
-| `meguviz-ui-codegen-api` / `meguviz-ui-codegen` | KSP 生成器声明与处理器（P2） |
+| `meguviz-ui-core` | 会话、引用、属性绑定、调度、状态恢复与扩展注册表 |
+| `meguviz-ui-widgets` | `openMeguvizUi()`、Framework 工厂、父布局作用域、尺寸与常用 `Properties` |
+| `meguviz-ui-plan` | 纯数据计划（`UiPlan`） |
+| `meguviz-ui-codegen-api` / `meguviz-ui-codegen` | KSP 注解声明与代码生成处理器 |
+| `meguviz-ui-recycler` | 可选 `RecyclerView` 后台有界 Diff 列表适配 |
+| `meguviz-ui-text` | 长纯文本异步预计算 |
+| `meguviz-ui-layouts` | 受限原生横向行 `nativeRow` |
+| `meguviz-ui-prewarm` | 可取消的有界主线程分帧预热 |
+| `meguviz-ui-frame-shared` | 多会话共享帧驱动 `SharedFrameDriver` |
+| `meguviz-ui-ref-bridge` | 对接真实 `MeguvizRef` `CodeScope` |
+| `meguviz-ui-android-bridge` | 对接真实 `MeguvizAndroid` `WindowSession` 与资源权威 |
 
-可选 P2 模块按需添加，例如：
+### 使用 `meguviz-ui-codegen` 的 BOM 必填提醒
+
+Gradle 的 `ksp` 和 `compileOnly` 配置不会自动继承 `implementation(platform(...))`。如果启用 KSP 工厂生成，必须在 `compileOnly` 与 `ksp` 中同时传入 BOM 平台（或直接写出 `:1.2.0`）：
 
 ```kotlin
 dependencies {
-    implementation("io.github.jichuo1.meguviz:meguviz-ui-widgets:1.0.0")
-    implementation("io.github.jichuo1.meguviz:meguviz-ui-recycler:1.0.0")
-    implementation("io.github.jichuo1.meguviz:meguviz-ui-text:1.0.0")
+    val meguvizBom = platform("io.github.jichuo1.meguviz:meguviz-bom:1.2.0")
+    implementation(meguvizBom)
+    compileOnly(meguvizBom)
+    ksp(meguvizBom)
+
+    implementation("io.github.jichuo1.meguviz:meguviz-ui-widgets")
+    compileOnly("io.github.jichuo1.meguviz:meguviz-ui-codegen-api")
+    ksp("io.github.jichuo1.meguviz:meguviz-ui-codegen")
 }
 ```
 
-P2 模块默认关闭，启用方式与边界见 [P2 可选能力](../p2.md)。
+不需要 Ref、Android 窗口运行时或 Lumen 时，保持无桥独立引入即可，无需提前添加未使用的可选模块。
 
-## 本地候选仓库
+## 本地候选仓库（用于验证本地修改或 `ui-lumen-bridge`）
 
-用于验证未发布的源码改动。先在源码根目录执行：
+在源码根目录构建并发布到本地 Maven 目录 `build/repo/`：
 
 ```sh
 ./gradlew verifyHost publishCandidate --no-daemon --max-workers=2
+# 若需一并构建未上 Central 的 Lumen 桥，追加 -PenableLumen=true
 ```
 
-生成的 Maven 仓库位于源码根目录的 `build/repo/`。消费项目需显式指向自己的实际目录：
+在消费工程的 `settings.gradle.kts` 指向该本地目录：
 
 ```kotlin
-// 消费项目的 settings.gradle.kts
 dependencyResolutionManagement {
     repositories {
-        // getOrElse: 未传 -P 时不会因 Provider 缺失而抛异常，直接回退到源码构建产物目录。
-        maven { url = uri(providers.gradleProperty("meguvizUiRepository")
-            .getOrElse(file("../MeguvizUI/build/repo").absolutePath)) }
+        maven {
+            url = uri(
+                providers.gradleProperty("meguvizUiRepository")
+                    .getOrElse(file("../MeguvizUI/build/repo").absolutePath),
+            )
+        }
         google()
         mavenCentral()
     }
 }
 ```
 
-把 `meguvizUiRepository` 设置为 `build/repo` 的路径，依赖写法与 Central 相同（本地候选的版本号是 `1.2.0`）。
-
 ## 常见报错
 
 | 报错 | 通常原因 | 处理 |
 | --- | --- | --- |
-| `Could not find io.github.jichuo1.meguviz:meguviz-ui-widgets:1.0.0` | 仓库里没有 `mavenCentral()`，或版本号写错 | 确认 `repositories { mavenCentral() }` 与版本 `1.0.0` |
-| `Could not find io.github.jichuo1.meguviz:meguviz-ui-widgets:1.2.0` | `1.2.0` 尚未发布到 Central | 消费 `1.0.0`，或改用本地候选仓库 |
-| `Could not find io.github.jichuo1.meguviz:meguviz-ui-lumen-bridge:...` | 两个桥未发布到 Central | 从源码构建并启用对应 Gradle 属性 |
-| `uses-sdk:minSdkVersion X cannot be smaller than version 27 declared in library` | 应用 `minSdk` 低于库声明 | 把 `minSdk` 提到 27 或以上 |
-| `Compilation with Java 17` / `class file has wrong version 61` | 消费端 JDK 低于 17 | 使用 JDK 17 编译 |
+| `Could not find io.github.jichuo1.meguviz:meguviz-ui-widgets:1.2.0` | 仓库未配置 `mavenCentral()` | 在 `repositories` 添加 `mavenCentral()` 与 `google()` |
+| `Could not find io.github.jichuo1.meguviz:meguviz-ui-codegen:` | `ksp(...)` 未传入 BOM 或版本 | 在 `ksp(...)` 与 `compileOnly(...)` 同处添加 `platform(bom)` |
+| `Could not find io.github.jichuo1.meguviz:meguviz-ui-lumen-bridge` | Lumen 桥未发布到 Central | 从源码仓库执行 `-PenableLumen=true publishCandidate` 后走本地消费 |
+| `uses-sdk:minSdkVersion X cannot be smaller than version 27` | 应用 `minSdk` 低于 `27` | 将消费模块 `minSdk` 提升至 `27` 及以上 |
+| `Metadata version 2.4.0 ...` / `class file has wrong version 61` | Kotlin < `2.3` 或 JDK < `17` | 升级至 JDK `17` 与 Kotlin `2.3+`（推荐 `2.4.21`） |
 
 ## 下一步
 

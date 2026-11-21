@@ -2,11 +2,11 @@
 
 本文按「现象 → 原因 → 排查 → 解决」处理 MeguvizUI 自身抛出的异常。完整的逐字消息清单见[错误目录](error-catalog.md)。
 
-**口径**
+**口径与适用范围**
 
-- 只覆盖本仓库源码中的异常。MeguvizAndroid、MeguvizDrawable、Lumen 等上游库抛出的消息不在本仓库，本文只标注调用点与排查方向。
-- 消息均为源码逐字引用；源码 1.2.0 尚未发布，标注「源码候选」的行为以当前源码为准。
-- 单元测试通过不等于设备行为已验收；涉及真实 View、Choreographer、窗口与 OEM 的结论需要设备证据。
+- 只覆盖本仓库 `1.2.0` 源码中的异常消息（均为源码逐字引用）。MeguvizAndroid、MeguvizDrawable、Lumen 等上游库抛出的消息不在本仓库，本文仅标注调用点与排查方向。
+- `1.2.0` 中包含 `openMeguvizUi`、`submitStateAsync` / `submitCommandAsync`、`ui-frame-shared`、`ui-android-bridge` 与 `ui-ref-bridge` 在内的 12 个制品均已发布到 Maven Central；仅 `ui-lumen-bridge` 暂未发布到 Central。
+- 涉及真实 View、Choreographer、窗口及不同 OEM 机型的具体行为仍以实际设备测试结果为准。
 
 ---
 
@@ -21,25 +21,27 @@
   2. 检查是否从 `Executor`、线程池、协程 `Dispatchers.Default/IO`、`Thread {}` 或静态初始化器直接调用。
   3. 检查单元测试是否没有主线程 `Looper`（Instrumentation 或 Robolectric 之外）。
 - **解决**：切回主线程。`Handler(Looper.getMainLooper()).post { ... }`、`Activity.runOnUiThread { ... }`、协程 `withContext(Dispatchers.Main) { ... }`。后台只计算纯数据，再把结果投递回主线程。
-- **例外**：`UiSession.requestClose()` 可从后台调用（`UiSession.kt`），内部 post 到主线程；返回的 `CloseRequest.completed` 才表示 owner 已实际清理。其他会话 API 没有跨线程入口（`state`/`scheduler` 属性本身可读，但调度器方法仍要求主线程）。
+- **例外**：
+  - `UiSession.requestClose()` 可从后台线程调用（`UiSession.kt`），内部 post 到主线程；返回的 `CloseRequest.completed` 才表示 owner 已实际清理。
+  - 后台向主线程合流提交状态或命令请用 `UiSession.submitStateAsync` / `submitCommandAsync`（或 `UiScheduler` 同名方法）。其他同期操作 API 均要求在主线程调用。
 
 ### Q: 构造驱动或提交帧时：`Frame driver requires the main thread` / `Frame source requires the main thread`
 
-- **位置**：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/ChoreographerFrameDriver.kt`、`:85`；`ui-frame-shared/src/main/kotlin/io/github/jichuo1/meguviz/ui/frames/ChoreographerFrameSource.kt`、`:90`（源码候选）
-- **触发**：`ChoreographerFrameDriver` 构造或 `requestFrame`、`SharedFrameDriver`/`ChoreographerFrameSource` 在非主线程调用。
-- **排查**：同上一问；注意 `UiSession(environment, driver)` 的 driver 也在主线程构造。
+- **位置**：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/ChoreographerFrameDriver.kt`；`ui-frame-shared/src/main/kotlin/io/github/jichuo1/meguviz/ui/frames/ChoreographerFrameSource.kt`
+- **触发**：`ChoreographerFrameDriver` 构造或 `requestFrame`、`SharedFrameDriver` / `ChoreographerFrameSource` 在非主线程调用。
+- **排查**：同上一问；注意 `UiSession(environment, driver)` 的 driver 也须在主线程构造。
 - **解决**：在主线程创建会话与驱动。
 
 ### Q: P2 模块报 `Main thread required` / `Owner thread required`
 
 - **位置**：`ui-recycler/src/main/kotlin/io/github/jichuo1/meguviz/ui/recycler/UiListAdapter.kt`（`Main thread required`）；`ui-recycler/src/main/kotlin/io/github/jichuo1/meguviz/ui/recycler/LatestWork.kt`、`ui-text/src/main/kotlin/io/github/jichuo1/meguviz/ui/text/LatestTextWork.kt`（`Owner thread required`）
-- **触发**：`UiListAdapter` 的 `submitList`/`bind`/生命周期回调，或 `LatestWork`/`LatestTextWork` 的提交不在创建它们的 owner 线程。
+- **触发**：`UiListAdapter` 的 `submitList` / `bind` / 生命周期回调，或 `LatestWork` / `LatestTextWork` 的提交不在创建它们的 owner 线程。
 - **排查**：确认 `background` Executor 只做计算；`submitList` 必须在主线程调用。
 - **解决**：把提交移回主线程；后台结果通过 `owner` Executor 投递。
 
-### Q: 源码候选 `openMeguvizUi must be called on the main thread`
+### Q: `openMeguvizUi must be called on the main thread`
 
-- **位置**：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/UiScope.kt`（未提交源码候选，不在 1.0.0）
+- **位置**：`ui-widgets/src/main/kotlin/io/github/jichuo1/meguviz/ui/widgets/UiScope.kt`
 - **触发**：在非主线程调用 `Activity.openMeguvizUi()`。
 - **解决**：在 Activity 主线程方法（如 `onCreate`）中调用。
 
@@ -62,7 +64,7 @@
   1. 找到消息里的 key 值，搜索同一父容器下的重复 `ViewKey(...)`。
   2. 动态列表场景：确认同一时刻兄弟节点 key 唯一；item 移动/删除后 key 是否被错误复用。
   3. 检查是否有两次挂载用了同一个 key（例如 `onCreate` 与恢复流程各挂一次）。
-- **解决**：换 key，或先 `session.release(oldRef)` 再挂载同 key。挂载失败时 key 会被自动释放（`UiSession.kt`、`:108-112`、`:132-136`），不需要手动清理半成功状态。
+- **解决**：换 key，或先 `session.release(oldRef)` 再挂载同 key。挂载失败时 key 会被自动释放（`UiSession.kt` `mount` / `transfer` 的异常路径），不需要手动清理半成功状态。
 
 ### Q: `Duplicate root key: $key`
 
@@ -109,7 +111,7 @@
 
 ### Q: `Binding closed`
 
-- **位置**：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Properties.kt`、`:72`；`ui-text/src/main/kotlin/io/github/jichuo1/meguviz/ui/text/PrecomputedTextBinding.kt`
+- **位置**：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/Properties.kt`（`submit` / `operation`）；`ui-text/src/main/kotlin/io/github/jichuo1/meguviz/ui/text/PrecomputedTextBinding.kt`
 - **触发**：`PropertyBinding.submit` / `operation` / `PrecomputedTextBinding.submit` 在绑定关闭后调用。
 - **排查**：检查绑定句柄是否被提前 `close()`，或节点/会话释放后仍持有旧绑定。
 - **解决**：重新绑定；不要跨 `release`/`rebind` 持有旧 `PropertyBinding`。
@@ -130,8 +132,8 @@
 
 ### Q: 提交被拒绝，或调度器进入 FAULTED
 
-- **相关消息/枚举**：`SubmitResult.Rejected(FAULTED)`（`UiScheduler.kt`、`:469-474`）；`Only a faulted scheduler can recover`（`UiScheduler.kt`）；`Only a paused scheduler can resume`（`UiScheduler.kt`）
-- **触发**：`isValid` 或 action 抛异常（`UiScheduler.kt`、`:734-755`），或帧请求失败（`:499-501`）。fault 会记录 `SchedulerFailure` 并清空队列（`:757-761`）。
+- **相关消息/枚举**：`SubmitResult.Rejected(FAULTED)`（`UiScheduler.kt`）；`Only a faulted scheduler can recover`（`UiScheduler.kt`）；`Only a paused scheduler can resume`（`UiScheduler.kt`）
+- **触发**：`isValid` 或 action 抛异常，或帧请求失败。fault 会记录 `SchedulerFailure` 并清空队列。
 - **排查**：
   1. 读取 `session.scheduler.failure`（`SchedulerFailure`，字段见 `UiScheduler.kt`）：`operation`（标签）、`operationIndex`、`appliedInBatch`、`phase`、`exceptionType`、`message`。
   2. `phase` 取值：`"validation"`（isValid 抛错）、`"action"`（action 抛错）、`"driver"`（帧请求失败）。
@@ -143,7 +145,7 @@
 
 ### Q: detach/reattach 能清除 FAULTED 吗？
 
-不能。`detach()` 暂停调度器并清队列（`UiSession.kt`），`reattach()` 只恢复 PAUSED（`:224`）；两者都不会清除 FAULTED。Android 桥在 attach 时只对 PAUSED 调 `reattach`（`ui-android-bridge/src/main/kotlin/io/github/jichuo1/meguviz/ui/android/AndroidUiBinding.kt`），FAULTED 需要显式 `recover()` 或重建。
+不能。`detach()` 暂停调度器并清队列（`UiSession.kt`），`reattach()` 只恢复 `PAUSED`；两者都不会清除 `FAULTED`。Android 桥在 attach 时只对 `PAUSED` 调 `reattach`（`ui-android-bridge/src/main/kotlin/io/github/jichuo1/meguviz/ui/android/AndroidUiBinding.kt`），`FAULTED` 需要显式 `recover()` 或重建。
 
 ### Q: Android 桥 attach 后不恢复？
 
@@ -153,7 +155,7 @@
 
 - `isValid` 只做纯校验，不抛异常、不做副作用。
 - action 里避免调用可能抛错的外部代码；业务校验放提交前。
-- 自定义驱动必须异步投递且每次请求至多投递一次，否则 `UiFrameDriver must not invoke a requested callback synchronously`（`UiScheduler.kt`）或 `Nested frame delivery is not supported`（`:508`）会进入 fault。
+- 自定义驱动必须异步投递且每次请求至多投递一次，否则 `UiFrameDriver must not invoke a requested callback synchronously`（`UiScheduler.kt`）或 `Nested frame delivery is not supported`（`UiScheduler.kt` `drain`）会进入 fault。
 
 ---
 
@@ -168,7 +170,7 @@
 
 ### Q: `Duplicate restoration node` / `Duplicate restore path`
 
-- **位置**：`ViewRestoration.kt`（Bundle 内重复 `NodeIdentity`）、`:68`（同一快照内重复 path）
+- **位置**：`ViewRestoration.kt`（Bundle 内重复 `NodeIdentity`；同一快照内 `register` 重复 `path`）
 - **触发**：保存的 Bundle 有重复节点；或 `register(path, ref, root)` 被同一 path 调用两次。
 - **排查**：`NodeIdentity` 由 `(path, component.id, component.schema)` 组成（`StateCodec.kt`）；检查是否同一逻辑节点用了不同 path，或不同节点用了同 path。
 - **解决**：path 在同一快照内唯一；清理旧快照或升级 schema。
@@ -188,9 +190,9 @@
 
 ### Q: 恢复不生效 / 被撤销
 
-- **原因 1**：在 `register`/`restoreAfterLayout` 之后又调用了 `userInteracted()`。`userInteracted()` 会递增交互代际并取消待恢复（`ViewRestoration.kt`）；`restoreAfterLayout` 只在代际一致时恢复（`:104-118`）。输入控制器应在记录新意图前调用它。
-- **原因 2**：`restoreAfterLayout(root)` 只在 `root.isLaidOut` 后触发一次（`:104-106`）；布局未完成时不会恢复。
-- **原因 3**：`ref.token(resources = true)` 已失效（theme/resource/attach 代际变化），恢复被跳过（`:107-108`）。
+- **原因 1**：在 `register` / `restoreAfterLayout` 之后又调用了 `userInteracted()`。`userInteracted()` 会递增交互代际并取消待恢复（`ViewRestoration.kt`）；`restoreAfterLayout` 只在代际一致时恢复。输入控制器应在记录新意图前调用它。
+- **原因 2**：`restoreAfterLayout(root)` 只在 `root.isLaidOut` 后触发一次；布局未完成时不会恢复。
+- **原因 3**：`ref.token(resources = true)` 已失效（theme / resource / attach 代际变化），恢复被跳过。
 - **原因 4**：保存的是 `ViewPresentation`（focus/scroll/selection），不包含文本内容；文本必须来自应用权威模型（`ViewRestoration.kt` 注释、`docs/api-semantics.md`）。
 
 ### Q: 正确的恢复顺序
@@ -237,7 +239,7 @@
 
 ### Q: `Frame driver closed or close listener already owned` / `Android frame channel closed`
 
-- **位置**：`AndroidFrameDriver.kt`、`:44`
+- **位置**：`AndroidFrameDriver.kt`（`onClose` / `requestFrame`）
 - **触发**：驱动关闭后仍操作；或重复注册 `onClose`。
 - **解决**：配对一次 `driver.onClose(uiSession::close)` 与 `uiSession.onClose(driver::close)`；不要重复注册。
 
@@ -271,7 +273,7 @@
 
 ### Q: `View already managed` / `Factory returned an already parented View` / `Inflater returned an already owned View`
 
-- **位置**：`UiSession.kt`、`:89`；`:73`；`:127`
+- **位置**：`UiSession.kt`（`mount` / `borrow` / `inflate`）
 - **触发**：
   - `View already managed`：同一 View 实例已被本会话管理，又调用 `mount`/`borrow`。
   - `Factory returned an already parented View`：工厂返回的 View 已有 parent。
@@ -320,15 +322,15 @@
 | `rebind(ref)` | 提升 binding 代际，释放旧监听/属性，清空属性槽，`discardInvalid()` | `UiSession.kt` |
 | `release(ref)` | 递归释放子树；CREATED/TRANSFERRED 移除 View，BORROWED 保留外部结构 | `UiSession.kt` |
 
-`reattach()` 的 `check(state == SessionState.DETACHED)`（`UiSession.kt`）与 `resolve` 的 `check(ref.session === this)`（`:153`）**没有异常消息**，误用会抛无消息的 `IllegalStateException`。
+`reattach()` 的 `check(state == SessionState.DETACHED)`（`UiSession.kt`）与 `nodeOf` 中的 `check(ref.session === this)` **没有异常消息**，误用会抛无消息的 `IllegalStateException`。
 
 ### Q: 桥的生命周期所有权？
 
 | 桥 | 所有权 | 源码 |
 | --- | --- | --- |
-| Lumen | 默认 `ownsSession = false`，不关闭 Lumen session；只有显式 `true` 才关 | `LumenUiBridge.kt`、`:38` |
-| Android | 关闭自己创建的 `ViewScope`、帧通道、注册；调用者继续拥有 `WindowSession` 与 root | `AndroidUiBinding.kt`、`:60-66` |
-| Ref | 借用共享 `CodeScope`，不关闭它 | `RefBindingSession.kt`、`:101-117` |
+| Lumen | 默认 `ownsSession = false`，不关闭 Lumen session；只有显式 `true` 才关 | `LumenUiBridge.kt` |
+| Android | 关闭自己创建的 `ViewScope`、帧通道、注册；调用者继续拥有 `WindowSession` 与 root | `AndroidUiBinding.kt` |
+| Ref | 借用共享 `CodeScope`，不关闭它 | `RefBindingSession.kt` |
 
 ---
 
@@ -343,7 +345,7 @@
 | Layouts | `A row must allow between 1 and 32 children`、`A native row must remain horizontal` | [错误目录](error-catalog.md) |
 | Ref | `CodeScope must be open`、`UI session is not active`、`View binding token is stale`、`The borrowed CodeScope identity or epoch changed` | [错误目录](error-catalog.md) |
 | Lumen | `Lumen bridge closed`、`Surface registration closed` | [错误目录](error-catalog.md) |
-| frame-shared（源码候选） | `Shared frame driver closed`、`FrameSource must deliver asynchronously and at most once per request` | [错误目录](error-catalog.md) |
+| `frame-shared` | `Shared frame driver closed`、`FrameSource must deliver asynchronously and at most once per request` | [错误目录](error-catalog.md) |
 
 ## 相关文档
 

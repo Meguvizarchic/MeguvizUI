@@ -4,12 +4,11 @@
 
 **口径**
 
-- 消息**逐字**来自源码；`${...}`、`$...` 是源码中的插值占位符，实际消息会替换为具体值。
+- 消息**逐字**来自 `1.2.0` 源码；`${...}`、`$...` 是源码中的插值占位符，实际抛出时会替换为具体对象或值。
 - 表里列的是消息的**开头**。部分消息在开头之后用冒号追加了出问题的对象、原因和处理提示（例如 `Session disposed: this UiSession is closed (...)`），请按开头匹配；追加部分不改变这里的触发条件与处理方向。
-- 位置格式为 `文件:行号`，对应当前源码（1.2.0 源码候选）。
-- 标注「源码候选」的模块/API 不在 `v1.0.0` 发布标签中，尚未发布。
+- `ui-widgets`（`openMeguvizUi`）、`ui-frame-shared`、`ui-android-bridge`、`ui-ref-bridge` 等 12 个制品均已发布到 Maven Central `1.2.0`；仅 `ui-lumen-bridge` 尚未发布到 Central。
 - 上游库（MeguvizAndroid、MeguvizDrawable、Lumen、Ref runtime）抛出的异常不在本仓库，本文只列调用点，见末节。
-- `check`/`require` 抛 `IllegalStateException`/`IllegalArgumentException`；`error` 抛 `IllegalStateException`。无消息的 `check` 会抛无消息异常，单独标注。
+- `check` / `require` 抛 `IllegalStateException` / `IllegalArgumentException`；`error` 抛 `IllegalStateException`。无消息的 `check` 会抛无消息异常，单独标注。
 
 ---
 
@@ -22,7 +21,7 @@
 | `Session disposed` | `UiSession.kt` | 会话 | 不复用已关闭会话 |
 | `Factory type differs from component` | `UiSession.kt` | 挂载 | 修正工厂/类型配对 |
 | `Factory returned an already parented View` | `UiSession.kt` | 挂载 | 工厂返回无 parent 的新 View |
-| `View already managed` | `UiSession.kt`、`:89` | 挂载/借用 | 一个 View 只挂载一次 |
+| `View already managed` | `UiSession.kt`（`mount` / `borrow`） | 挂载/借用 | 一个 View 只挂载一次 |
 | `Duplicate root key: $key` | `UiSession.kt` | 借用 | 换 key 或改用 transfer |
 | `Explicitly detach before transferring; UI never steals an external child` | `UiSession.kt` | 移交 | 先显式 detach |
 | `Managed <merge> requires an explicit ownership protocol` | `UiSession.kt` | inflate | 改用具体根布局 |
@@ -35,14 +34,14 @@
 | `Invalidate the upstream resource authority` | `UiSession.kt` | 资源 | 让上游权威失效 |
 | `Owner looper rejected close` | `UiSession.kt` | 关闭 | 检查主线程 looper |
 | `Shared comparison requires a live getter` | `Properties.kt` | 属性 | SHARED_READ 必须给 read |
-| `Binding closed` | `Properties.kt`、`:72`；`PrecomputedTextBinding.kt` | 属性 | 重新绑定 |
+| `Binding closed` | `Properties.kt`（`submit` / `operation`）；`PrecomputedTextBinding.kt` | 属性 | 重新绑定 |
 | `A frame driver must declare its owner` | `UiScheduler.kt` | 调度 | 自定义驱动给 owner |
 | `Only a paused scheduler can resume` | `UiScheduler.kt` | 调度 | 先确认状态 |
 | `Only a faulted scheduler can recover` | `UiScheduler.kt` | 调度 | 先核对/重建状态 |
 | `UiFrameDriver must not invoke a requested callback synchronously` | `UiScheduler.kt` | 驱动 | 驱动必须异步投递 |
 | `Nested frame delivery is not supported` | `UiScheduler.kt` | 驱动 | 不要重入 drain |
 | `estimated=false requires a platform deadline; use estimated=true for an advisory budget` | `UiFrameDriver.kt` | 帧预算 | 按 estimated 语义传值 |
-| `Frame driver requires the main thread` | `ChoreographerFrameDriver.kt`、`:85` | 驱动 | 切回主线程 |
+| `Frame driver requires the main thread` | `ChoreographerFrameDriver.kt` | 驱动 | 切回主线程 |
 | `No provider for ${type.id}` | `Registry.kt` | 扩展 | 注册对应 provider |
 | `Component schema/type mismatch` | `Registry.kt` | 扩展 | 统一 schema/viewClass |
 | `Duplicate provider id` | `Registry.kt` | 扩展 | 去掉重复 id |
@@ -67,8 +66,8 @@
 | `Duplicate restoration node` | `ViewRestoration.kt` | 恢复 | 清理重复节点 |
 | `Duplicate restore path` | `ViewRestoration.kt` | 恢复 | path 唯一 |
 | `Explicit native ID must be managed by the caller's hierarchy restoration` | `ViewRestoration.kt` | 恢复 | 由调用方管理原生 id |
-| `openMeguvizUi must be called on the main thread`（源码候选） | `UiScope.kt` | 一行入口 | 切回主线程 |
-| `${javaClass.name} is destroyed`（源码候选） | `UiScope.kt` | 一行入口 | Activity 存活时调用 |
+| `openMeguvizUi must be called on the main thread` | `UiScope.kt` | 一行入口 | 切回主线程 |
+| `${javaClass.name} is destroyed` | `UiScope.kt` | 一行入口 | Activity 存活时调用 |
 | `Frame driver closed or close listener already owned` | `AndroidFrameDriver.kt` | Android 桥 | 不重复注册/操作 |
 | `Android frame channel closed` | `AndroidFrameDriver.kt` | Android 桥 | 关闭后不再请求 |
 | `A UI session may have only one pending frame request` | `AndroidFrameDriver.kt` | Android 桥 | 一个会话一张票据 |
@@ -82,15 +81,15 @@
 | `Dynamic factory type must belong to this CodeScope's actual loader` | `RefBindingSession.kt` | Ref 桥 | 类型属于该 loader |
 | `Use attach for View bindings` | `RefBindingSession.kt` | Ref 桥 | 用 attach 装配 |
 | `Dynamic factory is closed` | `RefBindingSession.kt` | Ref 桥 | 关闭后不再创建 |
-| `Receiver lease is closed` | `RefBindingSession.kt`、`:178` | Ref 桥 | 关闭后不再取值 |
+| `Receiver lease is closed` | `RefBindingSession.kt`（`ReceiverLease.value`） | Ref 桥 | 关闭后不再取值 |
 | `View binding token is stale` | `RefBindingSession.kt` | Ref 桥 | 重新获取 lease |
 | `Method handle is closed` | `RefBindingSession.kt` | Ref 桥 | 关闭后不再调用 |
-| `Shared frame driver closed`（源码候选） | `SharedFrameDriver.kt` | 共享帧 | 关闭后不再请求 |
-| `Shared frame driver client capacity exceeded`（源码候选） | `SharedFrameDriver.kt` | 共享帧 | 减少 client 数 |
-| `Shared frame driver request identities exhausted`（源码候选） | `SharedFrameDriver.kt` | 共享帧 | 重建驱动 |
-| `FrameSource must deliver asynchronously and at most once per request`（源码候选） | `SharedFrameDriver.kt` | 共享帧 | 修正 FrameSource |
-| `Shared frame driver requires the main thread`（源码候选） | `SharedFrameDriver.kt` | 共享帧 | 切回主线程 |
-| `Frame source requires the main thread`（源码候选） | `ChoreographerFrameSource.kt`、`:90` | 共享帧 | 切回主线程 |
+| `Shared frame driver closed` | `SharedFrameDriver.kt` | 共享帧 | 关闭后不再请求 |
+| `Shared frame driver client capacity exceeded` | `SharedFrameDriver.kt` | 共享帧 | 减少 client 数 |
+| `Shared frame driver request identities exhausted` | `SharedFrameDriver.kt` | 共享帧 | 重建驱动 |
+| `FrameSource must deliver asynchronously and at most once per request` | `SharedFrameDriver.kt` | 共享帧 | 修正 FrameSource |
+| `Shared frame driver requires the main thread` | `SharedFrameDriver.kt` | 共享帧 | 切回主线程 |
+| `Frame source requires the main thread` | `ChoreographerFrameSource.kt` | 共享帧 | 切回主线程 |
 | `Unsupported plan schema` | `UiPlan.kt` | Plan | schema 1.0 |
 | `Plan depth exceeds limit` | `UiPlan.kt` | Plan | 降低深度 |
 | `Empty or duplicate sibling key: ${node.key}` | `UiPlan.kt` | Plan | 兄弟 key 唯一 |
@@ -123,7 +122,7 @@
 | `Detach the adapter from every RecyclerView before close` | `UiListAdapter.kt` | Recycler | 先 detach 再 close |
 | `Main thread required` | `UiListAdapter.kt` | Recycler | 切回主线程 |
 | `Main looper rejected text result` | `PrecomputedTextBinding.kt` | Text | owner 存活期提交 |
-| `Text update rejected: ${result.reason}` | `PrecomputedTextBinding.kt`、`:129`、`:137` | Text | 按 SubmitResult 处理 |
+| `Text update rejected: ${result.reason}` | `PrecomputedTextBinding.kt` | Text | 按 SubmitResult 处理 |
 | `A row must allow between 1 and 32 children` | `NativeRow.kt` | Layouts | maxChildren 1..32 |
 | `Native row child count exceeds its declared bound` | `NativeRow.kt` | Layouts | 子节点数不超限 |
 | `A native row must remain horizontal` | `NativeRow.kt` | Layouts | 保持 HORIZONTAL |
@@ -171,8 +170,8 @@
 
 ### `View already managed`
 
-- **位置**：`UiSession.kt`、`:89`
-- **触发**：同一 View 实例已在会话内受管，又调用 `mount`（`:74`）或 `borrow`（`:89`）。
+- **位置**：`UiSession.kt`（`mount` / `borrow`）
+- **触发**：同一 View 实例已在会话内受管，又调用 `mount` 或 `borrow`。
 - **解决**：一个 View 只挂载/借用一次。
 
 ### `Duplicate root key: $key`
@@ -258,9 +257,9 @@
 
 ### `Binding closed`
 
-- **位置**：`Properties.kt`（`submit`）、`:72`（`operation`）；`ui-text/src/main/kotlin/io/github/jichuo1/meguviz/ui/text/PrecomputedTextBinding.kt`
-- **触发**：绑定关闭后仍 `submit`/`operation`。
-- **解决**：重新绑定；不要跨 `release`/`rebind` 持有旧绑定。
+- **位置**：`Properties.kt`（`submit` / `operation`）；`ui-text/src/main/kotlin/io/github/jichuo1/meguviz/ui/text/PrecomputedTextBinding.kt`
+- **触发**：绑定关闭后仍 `submit` / `operation`。
+- **解决**：重新绑定；不要跨 `release` / `rebind` 持有旧绑定。
 
 ---
 
@@ -305,8 +304,8 @@
 
 ### `Frame driver requires the main thread`
 
-- **位置**：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/ChoreographerFrameDriver.kt`、`:85`
-- **触发**：`ChoreographerFrameDriver` 构造或 `requestFrame`/取消在非主线程。
+- **位置**：`ui-core/src/main/kotlin/io/github/jichuo1/meguviz/ui/scheduler/ChoreographerFrameDriver.kt`
+- **触发**：`ChoreographerFrameDriver` 构造或 `requestFrame` / 取消在非主线程。
 - **解决**：切回主线程。
 
 ---
@@ -353,7 +352,7 @@
 
 ---
 
-## ui-widgets（源码候选，不在 v1.0.0）
+## ui-widgets（`1.2.0` 新增入口）
 
 ### `openMeguvizUi must be called on the main thread`
 
@@ -369,7 +368,7 @@
 
 ---
 
-## ui-android-bridge（未发布到 Central）
+## ui-android-bridge（`1.2.0` 已发布到 Central）
 
 ### `Frame driver closed or close listener already owned`
 
@@ -403,7 +402,7 @@
 
 ---
 
-## ui-lumen-bridge（未发布到 Central）
+## ui-lumen-bridge（尚未发布到 Central，仅源码构建）
 
 ### `Lumen bridge closed`
 
@@ -419,7 +418,7 @@
 
 ---
 
-## ui-ref-bridge（1.0.0 已发布；1.2.0 源码对应上游 1.2.0）
+## ui-ref-bridge（`1.2.0` 已发布到 Central）
 
 ### `CodeScope must be open`
 
@@ -466,7 +465,7 @@
 
 ### `Receiver lease is closed`
 
-- **位置**：`RefBindingSession.kt`、`:178`
+- **位置**：`RefBindingSession.kt`（`ReceiverLease.value`）
 - **触发**：receiver lease 关闭后调用 `value`。
 - **解决**：关闭后不再取值。
 
@@ -484,7 +483,7 @@
 
 ---
 
-## ui-frame-shared（源码候选，不在 v1.0.0）
+## ui-frame-shared（`1.2.0` 新增模块）
 
 ### `Shared frame driver closed`
 
@@ -519,7 +518,7 @@
 
 ### `Frame source requires the main thread`
 
-- **位置**：`ui-frame-shared/src/main/kotlin/io/github/jichuo1/meguviz/ui/frames/ChoreographerFrameSource.kt`、`:90`
+- **位置**：`ui-frame-shared/src/main/kotlin/io/github/jichuo1/meguviz/ui/frames/ChoreographerFrameSource.kt`
 - **触发**：`ChoreographerFrameSource` 构造或请求在非主线程。
 - **解决**：切回主线程。
 
@@ -636,8 +635,8 @@
 
 ### `Text update rejected: ${result.reason}`
 
-- **位置**：`PrecomputedTextBinding.kt`、`:129`、`:137`（`IllegalStateException`，交给 `onFailure`）
-- **触发**：文本更新被调度器拒绝（`SubmitResult.Rejected`），原因见 `RejectionReason`（PAUSED/FAULTED/CLOSED/STATE_CAPACITY/COMMAND_CAPACITY/EMPTY_BATCH）。
+- **位置**：`PrecomputedTextBinding.kt`（`finish` / `applyPlain`，`IllegalStateException` 交给 `onFailure`）
+- **触发**：文本更新被调度器拒绝（`SubmitResult.Rejected`），原因见 `RejectionReason`（`PAUSED` / `FAULTED` / `CLOSED` / `STATE_CAPACITY` / `COMMAND_CAPACITY` / `EMPTY_BATCH`）。
 - **排查**：检查 `scheduler.state` 与容量；不要忽略 `onFailure`。
 - **解决**：处理背压；确认会话存活。
 
@@ -686,7 +685,7 @@
 | --- | --- | --- |
 | `group table is full` | `UiScheduler.kt` | 分组表超过负载，正常公开路径不可达 |
 | `group table exceeded its bound` | `UiScheduler.kt` | 同上 |
-| `unexpected command entry: ${entry::class.java.name}` | `UiScheduler.kt`、`:727` | 命令队列混入非预期类型，公开 API 不可达 |
+| `unexpected command entry: ${entry::class.java.name}` | `UiScheduler.kt`（`discardInvalid` / `applyCommand`） | 命令队列混入非预期类型，公开 API 不可达 |
 | `Resolved component is not a ViewGroup` | `UiPlan.kt` | 有子节点的组件解析后不是 ViewGroup |
 | `Owner dispatcher failed; controller is closed` | `LatestWork.kt`、`LatestTextWork.kt` | owner 投递失败，控制器已关闭 |
 | `Background executor must run off the owner thread` | `LatestWork.kt`、`LatestTextWork.kt` | `background` Executor 在 owner 线程执行 |
@@ -713,7 +712,7 @@
 | --- | --- | --- |
 | `AndroidUiBinding.open` | `AndroidUiBinding.kt` | `WindowSession.requirePermission` 权限不足；`window.scope(root)` 重复注册 |
 | `LumenUiBridge.bind` | `LumenUiBridge.kt` | `LumenSurfaceSession.bind` |
-| `RefBindingSession.viewFactory` / `method` | `RefBindingSession.kt`、`:184` | `CodeScope.resolve(...).requireSingle()`、`bindConstructor`、`bindMethod` |
+| `RefBindingSession.viewFactory` / `method` | `RefBindingSession.kt` | `CodeScope.resolve(...).requireSingle()`、`bindConstructor`、`bindMethod` |
 | `RefBindingSession.activeScope` | `RefBindingSession.kt` | 本仓库抛 `StalePlanException`（消息见上） |
 | `SharedFrameDriver.requestFrame` | `SharedFrameDriver.kt` | 自定义 `FrameSource.requestFrame` 抛错（驱动会回滚本次请求） |
 

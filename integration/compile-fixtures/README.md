@@ -1,11 +1,17 @@
-# 真实 Kotlin 消费编译门禁
+# Kotlin 与 Java 消费编译门禁
 
-先构建并发布当前候选，再执行 `python integration/compile-fixtures/verify.py`。脚本从隔离 `build/repo` 的 Maven snapshot metadata 精确选择两个候选 AAR，核对其 SHA 与本次 release 输出一致，提取真正 `classes.jar`，使用版本目录指定的 Kotlin 编译器和公开 Android SDK 编译消费代码。
+先在根目录发布当前本地候选制品，再执行编译门禁脚本：
 
-`positive-java/` 是 Java 消费者，由 `javac`（须在 PATH 上）针对同一组候选 `classes.jar` 编译：`ViewKey` 参数的作用域方法在 JVM 上是带 `-` 的 mangled 名，Java 只能调用字符串 key 的那一组，这个正例保证 Java 的一行入口之后确实能挂载、绑定和提交。
+```sh
+./gradlew publishCandidate --no-daemon --max-workers=2
+python integration/compile-fixtures/verify.py
+```
 
-正例必须成功；错误父 LP、错误 typed ref、向纯数据快照塞 View 的反例必须由编译器报告类型不匹配。任意网络错误、缺类、编译器启动失败均不能充当反例通过。每项命令、退出码、日志、输入哈希与候选坐标保存在 `build/reports/compile-fixtures/receipt.json`。
+脚本从 `build/repo` 精确选取发布的 AAR，校验 SHA-256 与模块构建产物一致后提取 `classes.jar`，使用版本目录锁定的 Kotlin 编译器（`2.4.21`）与 Android 37 SDK 编译全部正负用例：
 
-`api/public-api.txt` 是初次候选的 JVM 公开描述符基线。只有经过人工审查 API 变化后才显式执行 `--update-api`；普通验证不重写基线。它包含 Kotlin 编译生成的公开 ABI，因此同时保留真实 Kotlin 正负消费编译。这份基线是当前候选自己的快照，本身证明不了历史二进制兼容；与已发布 1.0.0 的比较由 `build-logic/verification/legacy_abi.py check` 完成（基线在 `api/legacy/1.0.0/`，取自 Maven Central 的制品）。两者都只覆盖公开 JVM 描述符，不覆盖行为。
+- **正例（`positive/`、`positive-java/` 等）**：覆盖 Kotlin 与 Java 消费路径，包含 `openMeguvizUi`、`String` key 重载、`ViewRef.bind` 与可选桥入口，必须全部编译通过。
+- **反例（`negative-parent/`、`negative-ref/`、`negative-scope/`、`negative-state/`）**：验证错误父容器 `LayoutParams`、错误类型 `ViewRef`、作用域越界及向纯数据接口传入非法参数均会被编译器拒绝。
 
-脚本需要已有精确 Kotlin compiler POM 与依赖缓存、公开 Android 37 SDK、JDK 的 `java/javap`。未解析到正确依赖时 fail closed 并记录 blocked，不下载替代版本。`--gradle-cache` 与 `--android-jar` 可显式配置环境。
+`api/public-api.txt` 记录当前 `1.2.0` 的 JVM 公开描述符基线，仅在经过人工 API 审查后通过 `--update-api` 显式更新。向后兼容性由 `build-logic/verification/legacy_abi.py check` 核验当前 API 是否为 `api/legacy/1.0.0/` 的严格超集（仅覆盖公开 JVM 签名）。
+
+脚本依赖本地配置好的 Kotlin 编译器依赖缓存、Android 37 SDK 与 `javac`（可通过 `--gradle-cache` 与 `--android-jar` 显式指定）；任一环境前置缺失会标记为 blocked 而非放行通过。执行记录写入 `build/reports/compile-fixtures/receipt.json`。

@@ -1,47 +1,51 @@
 # 可选桥与依赖边界
 
-所有桥均默认关闭，通过 Gradle 属性分别启用：
+三个桥接模块默认不参与核心构建，在源码仓库内通过 Gradle 属性按需开启：
 
 ```sh
 ./gradlew -PenableLumen=true -PenableRef=true -PenableAndroid=true verifyHost
 ```
 
-这条命令仅在对应依赖已经准备好时适用。三个桥均不进入普通 core/widgets 的传递依赖。
+三个桥均不进入 `meguviz-ui-core` 或 `meguviz-ui-widgets` 的传递依赖。
 
-**独立运行是默认能力，联动只是增强。** MeguvizUI 不要求 MeguvizAndroid、MeguvizDrawable、Ref 或 Lumen；反过来，两兄弟库也无需 UI 才能使用。只开启实际需要的桥，任一方缺席时使用各库自己的调度、属性或绘制入口。核心优化不以启用桥为前提；联合合同和性能工具也不挂到默认核心构建，不自动连接设备或外部服务。
+**独立运行是默认能力，桥接仅作增强**。MeguvizUI 不强依赖 MeguvizAndroid、MeguvizDrawable、MeguvizRef 或 Lumen；各兄弟库也可脱离 MeguvizUI 独立使用。仅在工程实际使用对应宿主能力时才添加对应的桥模块。
 
-## Lumen
+## Maven Central 与源码构建状态（`1.2.0`）
 
-`ui-lumen-bridge` 使用 `com.github.jichuo1.LumenCoacervationEngine:lumen-engine:1.5.5`，从限定 group 的 JitPack 仓库解析。桥使用真实 `LumenSurfaceSession` 与 binding，为视觉属性保留所有权；材质、动画和绘制仍由 Lumen 负责。会话是否随桥关闭由明确的所有权参数决定。
+| 桥接模块 | Maven 制品 | 上游依赖 | 当前分发状态 |
+| --- | --- | --- | --- |
+| Ref 桥（`ui-ref-bridge`） | `meguviz-ui-ref-bridge:1.2.0` | `meguviz-ref-core:1.2.0` | 已发布到 Maven Central（含在 `meguviz-bom:1.2.0`） |
+| Android 桥（`ui-android-bridge`） | `meguviz-ui-android-bridge:1.2.0` | `meguviz-android-runtime:1.2.0`、`meguviz-android-window:1.2.0` | 已发布到 Maven Central（含在 `meguviz-bom:1.2.0`） |
+| Lumen 桥（`ui-lumen-bridge`） | `meguviz-ui-lumen-bridge:1.2.0` | JitPack `LumenCoacervationEngine:lumen-engine:1.5.5` | **尚未发布到 Central**，仅支持源码启用 `-PenableLumen=true` 本地构建 |
 
-## Ref 与 Android
+> 补充说明：`LumenCoacervationEngine` 本身已发布 `io.github.jichuo1:lumen-engine:1.6.2` 到 Maven Central 与 JitPack，但本仓库当前 `gradle/libs.versions.toml` 仍锁定 JitPack `1.5.5`（参见 [Lumen 桥接指南](guides/bridges-lumen.md)）。
 
-Ref 桥依赖 `io.github.jichuo1.meguviz:meguviz-ref-core:1.2.0`，Android 桥依赖 `meguviz-android-runtime`/`meguviz-android-window` 1.2.0。三者都是正式版本号，但 1.2.0 目前**尚未发布到 Maven Central**（Central 上 `meguviz-ref-core` 目前只有 1.0.0），所以只能从本地候选仓库解析；[upstream-candidates.toml](../gradle/upstream-candidates.toml) 与 Gradle 校验元数据固定的是各自本地 1.2.0 候选的 SHA-256。
+## 源码联调本地上游 `-SNAPSHOT`
 
-上游 1.2.0 发布到 Central 之前，这两个桥在默认仓库下无法解析；发布后必须确认 Central 字节与 pins 一致，不一致时重新审阅并更新 pins，不能直接放宽校验。
-
-`build/upstream-repo/` 镜像只用于 SNAPSHOT 形式的 pin（`settings.gradle.kts` 只把 `-SNAPSHOT` 版本交给它）。改用 SNAPSHOT 候选时，先取得与 pins 一致的 Maven 仓库再导入：
+若在源码中联调尚未发布的上游 `-SNAPSHOT` 变更，`settings.gradle.kts` 仅将 `*-SNAPSHOT` 版本的 `meguviz-android-runtime` / `meguviz-android-window` 路由到 `build/upstream-repo/`。可通过脚本导入通过哈希验证的本地 Maven 仓库：
 
 ```sh
 python scripts/import-upstream-candidates.py --repository <android-maven-repository> --artifact meguviz-android-runtime --artifact meguviz-android-window
 ```
 
-脚本验证所有输入后导入 `build/upstream-repo/`，不构建或修改上游项目。版本或哈希不一致会拒绝；没有这些制品时仍可构建默认的核心与示例。
+常规已发布版本 `1.2.0` 直接从 `mavenCentral()` 解析并受 `gradle/upstream-candidates.toml` 与 Gradle 校验元数据保护，不得放宽哈希或版本号校验。
 
-Ref 桥使用真实 `CodeScope`、`QuerySpec`、`ConstructorPlan` 与 `MethodPlan`。UI 自己的 receiver lease 同时检查代码身份与 View 生命周期，不伪造上游接口，也不维护全局 receiver 缓存。
+## 三个桥的真实边界
 
-Android 桥使用真实 `WindowSession`、`FrameScheduler.FrameChannel` 与资源状态权威。在同一帧通道内执行 UI 更新，避免额外调度器。窗口所有者必须先关闭 binding，再关闭共享窗口或 scheduler；外部关闭的可观测性受上游公开 API 限制。
+- **Lumen 桥**：使用真实 `LumenSurfaceSession` 与 `LumenSurfaceBinding`，为宿主保留 `"background"` 属性槽；材质、采样与动画由 Lumen 管理，是否随桥关闭由 `ownsSession` 决定（默认 `false`）。
+- **Ref 桥**：使用真实 `CodeScope`、`QuerySpec`、`ConstructorPlan` 与 `MethodPlan`；UI 侧持有独立 receiver lease，同时检查代码域 epoch 与 `ViewRef` 生命周期，不伪造上游接口，也不维护全局 receiver 缓存。
+- **Android 桥**：使用真实 `WindowSession`、`FrameScheduler.FrameChannel` 与 `ResourceState` 权威；在同一上游帧回调中执行有界 UI drain。必须先关闭 `AndroidUiBinding`，再关闭共享窗口或 `FrameScheduler`。
 
 ## 联合快路径与后台任务
 
-- 普通 UI 属性仍通过 `PropertyBinding.submit` 提交，Lumen 的材质与动画仍由 Lumen 管理；不要把共享背景同时交给两个库写入。
-- 有窗口时优先用 `AndroidUiBinding.open(window, root)` 复用上游帧通道。桥在同一次上游帧回调中执行有界 UI drain，不再投递一个 Handler 消息或第二次 Choreographer 帧。
-- `UiSession`、属性绑定、帧通道的建立/关闭都在 owner 主线程。后台线程只计算脱离 View/Context 的结果，再通过宿主的有界 mailbox 或 owner dispatcher 投递；后台直接调用 UI setter/`UiScheduler` 不受支持。
-- mailbox 的 state 通道只适合允许丢弃中间值的状态，command 通道保留调用次数。投递拒绝、任务取消、资源失效和过期结果都必须明确释放，不把队列扩成无界以掩盖背压。
-- Drawable 的 single-flight 缓存共享的是已准备结果，不共享可变 Drawable 实例。多订阅者不能各自销毁同一个缓存值；安装与销毁继续遵守 Drawable 自己的所有权契约。
+- 普通 UI 属性继续通过 `PropertyBinding.submit` 更新，Lumen 材质由 Lumen 独立管理；不要把同一个 View 的 `"background"` 同时交给两个系统写入。
+- 有 `WindowSession` 时使用 `AndroidUiBinding.open(window, root)` 复用上游帧通道，不在同一回调外另投额外的 `Handler` 消息或第二次 `Choreographer` 请求。
+- `UiSession`、属性绑定与帧通道的创建及关闭都在主线程完成。后台线程只准备纯数据结果，再通过 `UiSession.submitStateAsync` / `submitCommandAsync` 或宿主有界 mailbox 投递回主线程。
+- 状态通道只适合允许覆盖中间值的展示属性；需保留次数的交互与业务操作走命令通道。取消、过期与投递拒绝均应显式清理，不通过改大成无界队列掩盖背压。
+- 与 Drawable 联动时，`Drawable` 的 single-flight 缓存共享的是已准备结果，多订阅者各自遵守安装与释放契约，不能销毁同一缓存实例。
 
-新 runtime 实现与 UI 的兼容性应分两步验证：先运行 runtime 自身合同，再用精确制品运行 UI 桥合同。源码路径、相同版本字符串或 API 签名一致都不能代替实际候选制品的联合测试；不得为了试跑覆盖 pins 或已发布的 1.0.0。
+## 适用范围与验证说明
 
-Host 接口与合同检查不等于 Android/ART、视觉或完整设备认证。
+验证新 runtime 实现与 UI 的兼容性应分两步执行：先运行上游 runtime 自身合同，再使用精确构建制品运行桥接合同；源码路径或签名一致不能替代实际制品联调。主机接口检查与单元测试用于验证协议与调度语义，不替代真实 Android 设备、ART 运行时或视觉渲染测试。
 
 [返回文档目录](README.md)

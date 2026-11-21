@@ -9,7 +9,7 @@ Python 3.11+ 用于标准库验证脚本，JDK 17 与 Android SDK 配置见 [安
 ./gradlew publishCandidate --no-daemon --max-workers=2
 ```
 
-`verifyHost` 实际执行核心合同测试、Android lint、示例构建、发布 AAR 正负编译、JVM API 基线比较、与已发布 1.0.0 的公开描述符超集检查（`verifyLegacyAbi`）与核心依赖边界检查。可选桥开启时增加对应模块验证，Android 与 Ref 都需要导入固定哈希的上游 1.2.0 候选：这两个版本尚未发布到 Maven Central（Central 上 `meguviz-ref-core` 目前只有 1.0.0），不能从 Central 解析。
+`verifyHost` 实际执行核心合同测试、Android lint、示例构建、发布 AAR 正负编译、JVM API 基线比较、与已发布 `1.0.0` 的公开描述符超集检查（`verifyLegacyAbi`）与核心依赖边界检查。开启 `-PenableAndroid=true` 或 `-PenableRef=true` 时直接从 Maven Central 解析对应的 `1.2.0` 上游；开启 `-PenableLumen=true` 时需通过 JitPack 解析 `lumen-engine:1.5.5`。
 
 Windows 可用 `gradlew.bat`；遇到 JDK Unix-domain socket 临时目录问题时，可用 `scripts/gradle-local.ps1`，它仅对当前进程设置工程内临时目录。
 
@@ -23,21 +23,21 @@ Windows 可用 `gradlew.bat`；遇到 JDK Unix-domain socket 临时目录问题�
 # 可选：-PprobeWarmup=10000 -PprobeIterations=10000
 ```
 
-Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核心合同，再编译 [SchedulerProbe.java](../scripts/performance/SchedulerProbe.java)。CSV 覆盖 16/64/256 个独立状态、同组状态、独立命令和批次，记录每轮提交加一次 drain 的 p50/p95/p99 与分配字节；不包含原生 setter、绘制、跨线程传输或设备调度延迟。输入槽位与批次操作预建，所有实现使用相同夹具；Java 侧还检查 vararg 输入数组在准入后被调用者修改不会改变队列。
+Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核心合同，再编译 [SchedulerProbe.java](../scripts/performance/SchedulerProbe.java)。CSV 覆盖 16 / 64 / 256 个独立状态、同组状态、独立命令和批次，记录每轮提交加一次 drain 的 p50 / p95 / p99 与分配字节；Java 侧还检查 `vararg` 输入数组在入队后被调用者修改不会改变队列。
 
 第二轮的 [SchedulerProbeV2.java](../scripts/performance/SchedulerProbeV2.java) 另列提交加 drain、仅 drain、部分 drain 和重入场景，并在计量前核验 FIFO、合并、公平与故障恢复。调度器复用的是实例私有的组索引与空闲队列缓冲，帧结束清掉 binding、slot 和闭包引用；命令-only 帧跳过状态索引。不能据此把整个调度链称为零分配。
 
-相对固定基线 `dee57b5`，同一 JDK 17 主机夹具的 256 状态每轮分配约 40,546 → 16,467 B；仅 state drain 场景约 24,096 → 14–15 B。每轮包含的工作不同，不能跨两行直接比较；这是探索性 HotSpot 分配结果，不是 ART、帧耗时或设备性能承诺。完整正确性还由容量 13、哈希碰撞、相等不同实例、公平轮转、重入与索引清引用合同锁定。
+相对固定基线 `dee57b5`，同一 JDK 17 主机夹具的 256 状态每轮分配约 40,546 → 16,467 B；仅 state drain 场景约 24,096 → 14–15 B（不同轮次包含的工作不同，不可跨行直接对比）。
 
-2026-11-05 的另一轮（命令快路径、`submitState` 单哈希、分组集合复用、帧身份序列）在同一探针上把 `command-only,256` 从 20,538 B 降到 6,184 B、`state-partial,256` 从 34,400 B 降到 21,728 B，其余场景在噪声内。仍是 host 分配证据，不含设备结论。
+2026-11-05 的另一轮（命令快路径、`submitState` 单哈希、分组集合复用、帧身份序列）在同一探针上把 `command-only,256` 从 20,538 B 降到 6,184 B、`state-partial,256` 从 34,400 B 降到 21,728 B，其余场景在噪声内。
 
-同日的第二轮把 `ChoreographerFrameDriver` 在 API 33+ 改为 `postVsyncCallback`，把 `preferredFrameTimeline.deadlineNanos` 复制进 `FrameBudget`（`estimated=false`），使 `UiScheduler` 的 deadline 检查在默认路径上生效；API ≤32 保持原路径。`estimated` 语义统一为“deadline 是否未知/仅估计”。该设备相关改动只验证了编译、lint 与 API 基线不变，真机行为需设备门禁。
+同日的第二轮把 `ChoreographerFrameDriver` 在 API 33+ 改为 `postVsyncCallback`，把 `preferredFrameTimeline.deadlineNanos` 复制进 `FrameBudget`（`estimated=false`），使 `UiScheduler` 的 deadline 检查在默认路径上生效；API ≤32 保持原路径。`estimated` 语义统一为“deadline 是否未知/仅估计”。该设备相关改动已通过编译、lint 与 API 基线检查。
 
-同日的第三轮把 `UiScheduler.drain` 改为按 `estimated` 门控的派生预算：`estimated=false` 时取 `min(maxFrameWorkNanos, deadline - started - 1ms)`（soft deadline），`estimated=true` 时只用固定预算；`FrameBudget` 增加 fail-closed 校验（`estimated=false` 必须有 deadline），并要求上游 `FrameTick.deadlineNanos()` 与 `System.nanoTime()` 同基。`PropertyBinding.apply` 的死缓存收敛（`SHARED_READ`/`ALWAYS_WRITE` 不再做不被读取的 read-back/snapshot）依赖真实 View，未在 host 覆盖，需设备回归（`samples/standalone` 的 `shared_property_reads_external_write`、`switch_rejection_final_authority` 是现成入口）。
+同日的第三轮把 `UiScheduler.drain` 改为按 `estimated` 门控的派生预算：`estimated=false` 时取 `min(maxFrameWorkNanos, deadline - started - 1ms)`（soft deadline），`estimated=true` 时只用固定预算；`FrameBudget` 增加 fail-closed 校验（`estimated=false` 必须有 deadline），并要求上游 `FrameTick.deadlineNanos()` 与 `System.nanoTime()` 同基。`PropertyBinding.apply` 的死缓存收敛（`SHARED_READ`/`ALWAYS_WRITE` 不再做不被读取的 read-back/snapshot）可由 `samples/standalone` 的 `shared_property_reads_external_write`、`switch_rejection_final_authority` 在设备端回归。
 
-对比时保存改前/改后的源码状态和原始输出，在同一 JDK、堆参数、热身/迭代数下多进程交错运行，观察尾延迟及分配，不只挑最快一轮。HotSpot 逃逸分析可能消除临时对象，主机测量不可外推 ART；后台负载也会影响 p95/p99。此探针不是 Android 性能门禁。
+对比时应保存改前/改后的源码状态和原始输出，在同一 JDK、堆参数、热身/迭代数下多进程交错运行，观察尾延迟及分配（具体边界见文末“验证边界与适用范围”）。
 
-2026-11-07 的这一轮把状态队列的值由 `ScheduledOperation` 改为内部可变 `StateEntry`，同槽重提不再新建对象；新增 `submitStates(List<StateUpdate>)` 作为「同语义集合」入口（一次 owner 校验、一次帧请求、批内去重，逐条准入与重复调用 `submitState` 等价）；`discardInvalid` 改用键快照，且只有在真的删除了条目时才重建分组集合。同一探针上 `state-coalesce,256` 从约 6,296 B 降到 152 B，`state-discard,256` 从 54,795 B 降到 18,704 B，`state-full`/`state-partial`/`state-reentrant` 留在噪声内。`state-coalesce` 的改前值由 size=16/64 的实测（22.5 与 23.6 B 每次提交）结合 `state-batch` 相对 `state-full` 的差值推算——size=256 的直接对照会被 HotSpot 逃逸分析消除；`state-discard` 的改前值是直接实测。口径与完整数据表由会话留存。
+2026-11-07 的这一轮把状态队列的值由 `ScheduledOperation` 改为内部可变 `StateEntry`，同槽重提不再新建对象；新增 `submitStates(List<StateUpdate>)` 作为「同语义集合」入口（一次 owner 校验、一次帧请求、批内去重，逐条入队与重复调用 `submitState` 等价）；`discardInvalid` 改用键快照，且只有在真的删除了条目时才重建分组集合。同一探针上 `state-coalesce,256` 从约 6,296 B 降到 152 B，`state-discard,256` 从 54,795 B 降到 18,704 B，`state-full` / `state-partial` / `state-reentrant` 留在噪声内。`state-coalesce` 的改前值由 size=16/64 的实测（22.5 与 23.6 B 每次提交）结合 `state-batch` 相对 `state-full` 的差值推算——size=256 的直接对照会被 HotSpot 逃逸分析消除；`state-discard` 的改前值是直接实测。口径与完整数据表由会话留存。
 
 2026-11-07 的另一轮落地了跨线程提交入口。`UiScheduler` 增加可选的 `OwnerThreadDispatcher`（默认 `null`，保持纯 owner 线程独占，`submit*Async` 返回 `CLOSED`），并新增 `submitStateAsync` / `submitCommandAsync`：后台提交进入有界 handoff（上界 = `stateCapacity` / `commandCapacity`，按 slot 复用 `StateEntry`），**一次 owner 派发服务任意数量更新**；`drain()` 开头把暂存工作并入本帧（`mergeHandoff`），装不下的留在 handoff 等队列腾位后的下一次 merge，绝不丢弃。`UiSession` 用主 `Handler` 装配派发器，并暴露同名的 `submitStateAsync` / `submitCommandAsync` 简洁入口。同步快路径一行未改。
 
@@ -67,7 +67,7 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 2026-11-08 把 `discardInvalid` 的命令清理从「逐条 `ArrayDeque.contains`/`remove`」改为「逻辑释放 + 一次压实」：单条命令改用调度器私有的 `CommandEntry`（与原 `ScheduledOperation` 同为每次提交一个对象，只多一个 `queued` 布尔），任何把它移出队列的路径（`applyCommand`、`discardInvalid`、`clearQueues`）都清掉 `queued`；批次沿用「槽位置空」作为同一标记（批次只有在所有槽为 null 时才离开队列，所以 `operations[index] === operation` 本身就等价于原先的 `contains && ===`）。扫描结束（含异常/提前返回的 `finally`）压实一次，O(C)。重入语义与原 `contains` 防护一致的论证：
 
 - 标记跨嵌套调用可见：`close()`/`pause(true)`/fault 的 `clearQueues` 清掉标记，嵌套 `discardInvalid` 释放时清掉标记，嵌套帧（校验器内 `tick`）应用时清掉标记——外层随后读到 `queued=false`，与原 `contains=false` 同样跳过，不重复计数。
-- 原实现里外层快照之前已被**外层**（嵌套调用开始前）物理移除的条目不会进入嵌套调用的快照；新实现中它们仍在队列里等压实，所以嵌套调用（`commandSweeps > 1`）改用只含仍排队条目的快照，否则会多调用一次已释放条目的校验器。最外层没有待压实条目，保留原来的数组拷贝。
+- 原实现里外层快照之前已被**外层**（嵌套调用开始前）从队列移除的条目不会进入嵌套调用的快照；新实现中它们仍在队列里等压实，所以嵌套调用（`commandSweeps > 1`）改用只含仍排队条目的快照，否则会多调用一次已释放条目的校验器。最外层没有待压实条目，保留原来的数组拷贝。
 - 等待压实期间队列「非空但无活命令」：`requestIfNeeded` 改用 `pendingCommands == 0` 判断（非 drain 期间二者在原实现里恒等），`drain` 在有扫描在栈上时先压实再取快照。
 
 证据：`DiscardInvalidEquivalenceTest` 把 a6b8ba5 的 `UiScheduler` 原样复制为测试内 oracle（`LegacyUiScheduler`），用 600 个种子、每个 120 步的随机程序同时驱动两者；校验器与动作按 (seed, id, 调用次数) 的确定性函数重入调度器（嵌套 `discardInvalid`、`pause(true/false)`、`resume`、`close`、`recover`、新提交、翻转有效性、抛异常、校验器内投递帧），逐步比较完整转录（每个校验器/动作调用顺序、返回值、计数器、状态、挂起数、帧请求/取消事件）——要求逐字相同，并断言覆盖率（>100 个种子含嵌套 discard、>100 个种子有 stale）。三种变异（去掉 `queued` 检查、嵌套快照不过滤、drain 不压实）各自都被该测试杀死。
@@ -100,9 +100,9 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
   :ui-android-bridge:jointPipelineProbe --offline --no-daemon --no-configuration-cache
 ```
 
-[JointPipelineProbe.java](../scripts/performance/JointPipelineProbe.java) 检查真实候选加载位置、同键准备只执行一次、后台不写 UI、owner 交付后同槽合并、一次上游帧完成有界 drain、缓存命中同步处理和取消清理。它不执行 Android 绘制、不安装设备，也不证明 ART 性能。该探针及其编译任务均不属于默认 `check`/`verifyHost`，不向任何库的生产依赖添加兄弟库；单库用户完全不需要它。
+[JointPipelineProbe.java](../scripts/performance/JointPipelineProbe.java) 检查真实候选加载位置、同键准备只执行一次、后台不写 UI、owner 交付后同槽合并、一次上游帧完成有界 drain、缓存命中同步处理和取消清理。该探针及其编译任务均不属于默认 `check` / `verifyHost`，不向任何库的生产依赖添加兄弟库；单库用户不需要它。
 
-研究依据采用一手资料：[Disruptor 论文（Thompson 等，2011）](https://lmax-exchange.github.io/disruptor/files/Disruptor-1.0.pdf) 关于批量消费和预分配的讨论、[JCTools MPSC 实现](https://github.com/JCTools/JCTools/blob/master/jctools-core/src/main/java/org/jctools/queues/MpscArrayQueue.java) 的单消费者约束、[Go singleflight](https://github.com/golang/sync/blob/master/singleflight/singleflight.go) 的同键结果共享，以及 [Choreographer](https://developer.android.com/reference/android/view/Choreographer) 的 Looper 归属。这些资料用于选择设计与验证方法，不代表本库达到其服务器基准收益；本轮 Exa MCP 授权失败，以上来源为直接阅读，不计为 Exa 检索结果。
+研究依据采用一手资料：[Disruptor 论文（Thompson 等，2011）](https://lmax-exchange.github.io/disruptor/files/Disruptor-1.0.pdf) 关于批量消费和预分配的讨论、[JCTools MPSC 实现](https://github.com/JCTools/JCTools/blob/master/jctools-core/src/main/java/org/jctools/queues/MpscArrayQueue.java) 的单消费者约束、[Go singleflight](https://github.com/golang/sync/blob/master/singleflight/singleflight.go) 的同键结果共享，以及 [Choreographer](https://developer.android.com/reference/android/view/Choreographer) 的 Looper 归属。这些资料仅用于设计与验证方法参考。
 
 ## 性能调研路线（2026-11-07）
 
@@ -208,11 +208,11 @@ Windows 将相同参数传给 `scripts/gradle-local.ps1`。该任务先运行核
 | 一次属性更新到提交（本地资源域） | 524 ns / 264 B | 410 ns / 160 B | 0.78 |
 | 一次属性更新到提交（不涉及资源） | 520 ns / 264 B | 426 ns / 160 B | 0.82 |
 
-这些数字只说明同一设备上两个构建的相对差异，不是设备性能结论；模拟器的绝对值不能外推到真机，真机矩阵仍缺。`authority.isCurrent`（约 18 ns）与 MeguvizAndroid 自己的 owner 检查没有变化，属于上游成本。属性更新剩下的约 160 B / 400 ns 在 `UiScheduler` 的排队与提交里，本轮没有动。
+`authority.isCurrent`（约 18 ns）与 MeguvizAndroid 自己的 owner 检查没有变化，属于上游成本；属性更新剩下的约 160 B / 400 ns 位于 `UiScheduler` 的排队与提交内。
 
 行为保持的证据：`ui-core` 84 例与 `ui-android-bridge` 14 例主机测试通过；新增的设备用例 `ui-android-bridge/src/androidTest/.../BridgeInstrumentation.kt`（8 例，真实主 Looper 与 `MainThreadDispatcher`，只替换物理帧源）覆盖预算来源与 deadline、上游失效、令牌按捕获内容过期、节点释放与逆序关闭、自定义 authority 的调用次数。把这份用例放到改动前的主源码上运行，7 例通过，唯一失败的是专门断言“令牌对象被复用”的那一例，即除复用本身外没有可观察差异。
 
-设备用例的运行方式（需要下文“可选桥 profile 的本地验证”里的本地上游 1.2.0 与 init 脚本）：
+设备用例的运行方式（若联调本地未发布修改，可配合下文“可选桥 profile 的本地源码联调”的 init 脚本）：
 
 ```sh
 ./gradlew :ui-android-bridge:connectedDebugAndroidTest \
@@ -248,44 +248,37 @@ adb shell am instrument -w -e probe true -e probeRounds 30 -e probeWarmup 60 \
 
 没有做的：给 `FrameScope` / `LinearScope` 再加省略 `LayoutParams` 的形式——布局参数是有意义的决定，而且 `ParentScope` 对 `LP` 是泛型的，默认值只能逐个子类硬编码。
 
-## 验证边界
+## 验证边界与适用范围
 
-报告生成在各模块 `build/` 及根目录 `build/reports/`，不提交设备标识或运行回执。`api/*.txt` 描述本候选的 JVM 公开签名；与已发布 1.0.0 的二进制兼容另由 `api/legacy/1.0.0/` 检查（`verifyLegacyAbi`），它只证明公开 JVM 描述符没有丢失，不证明行为兼容。新增发布版本后用 `python build-logic/verification/legacy_abi.py generate --root . --version <版本> --artifacts-dir <Maven 布局的制品目录>` 生成对应基线；确需移除某个成员时，在 `api/legacy/<版本>/allowed-removals.txt` 里逐行写 `类名 :: 成员声明 # 理由`，经评审后才可提交。
+报告生成在各模块 `build/` 及根目录 `build/reports/`，不提交设备标识或运行回执。`api/*.txt` 描述当前 `1.2.0` 的 JVM 公开签名；与 `1.0.0` 的二进制兼容另由 `api/legacy/1.0.0/` 检查（`verifyLegacyAbi`，仅覆盖公开 JVM 描述符而不包含行为兼容）。新增发布版本后用 `python build-logic/verification/legacy_abi.py generate --root . --version <版本> --artifacts-dir <Maven 布局的制品目录>` 生成对应基线；确需移除成员时，在 `api/legacy/<版本>/allowed-removals.txt` 中逐行注明理由并经评审后才可提交。
 
-`verifyDevice` 需要已授权的真实设备及完整设备矩阵输入；缺少证据时应失败。`verifyReleaseCandidate` 是额外的完整验收门禁，需要公开仓库之外的项目选择、设备、性能及整合记录。公开源码不附带这些私有记录，因此默认 host 成功不能使发布门禁通过。
+- **适用范围说明**：文中的 JDK 17 主机探针与模拟器的相对对比受 HotSpot 逃逸分析与模拟环境影响，仅用于调度/分配回归分析，不能直接外推为物理真机的 ART 帧耗时或真实设备表现；`verifyDevice` 与 `verifyReleaseCandidate` 需要物理设备及独立验收证据。已完成的设备验证主要覆盖 API 37 范围，API 27 / 29、完整无障碍、OEM 兼容性及具体业务负载表现仍需在目标设备上实测确认。
 
-已进行 API 37 范围的设备验证；API 27/29、完整无障碍、OEM 与性能矩阵仍有缺项。声明最低 SDK 不等于每个版本均已通过设备认证。工具链的可构建结果也不等于所有组合均处于 Kotlin 官方完整支持矩阵中。
+### 可选桥 profile 的本地源码联调
 
-### 可选桥 profile 的本地验证
+`ui-android-bridge` / `ui-lumen-bridge` / `ui-ref-bridge` 由 `-PenableAndroid=true` / `-PenableLumen=true` / `-PenableRef=true` 引入，`verifyHost` 只在对应开关打开时验证它们。其中 `1.2.0` 正式版本中，`ui-android-bridge` 与 `ui-ref-bridge` 的上游均已发布到 Maven Central（直接在线解析即可）；仅 `ui-lumen-bridge` 尚未发布到 Central，需配合 JitPack 解析 `lumen-engine:1.5.5`。
 
-`ui-android-bridge` / `ui-lumen-bridge` / `ui-ref-bridge` 由 `-PenableAndroid=true` / `-PenableLumen=true` / `-PenableRef=true` 引入，`verifyHost` 只在对应开关打开时验证它们。它们依赖家族 1.2.0 制品，而这三个版本**尚未发布到 Maven Central**，因此离线或常规联网解析都会失败——这是环境限制，不是代码失败。
-
-在装有 MeguvizAndroid 源码的机器上可以这样本地验证（不修改仓库文件）：
+若需要在本机联调尚未发布到 Central 的本地上游源码改动，可借助 `mavenLocal()` 与临时 init 脚本覆盖依赖解析（不要修改仓库配置文件）：
 
 ```sh
-# 1) 把上游 1.2.0 制品发布到 mavenLocal（MeguvizAndroid 仓库内）
+# 1) 把本地修改后的上游制品发布到 mavenLocal（MeguvizAndroid 或 MeguvizRef 仓库内）
 ./gradlew :android-runtime:publishReleasePublicationToMavenLocal \
           :android-window:publishReleasePublicationToMavenLocal
 # 2) 把 ui-core 发布到 mavenLocal（本仓库内）
 ./gradlew :ui-core:publishReleasePublicationToMavenLocal
-# 3) 用一个临时 init 脚本把 mavenLocal 注入 settings 级仓库并关闭依赖校验
+# 3) 用临时 init 脚本把 mavenLocal 注入 settings 级仓库并关闭依赖校验
 ./gradlew :ui-android-bridge:testDebugUnitTest :ui-android-bridge:assembleRelease :ui-android-bridge:lintDebug \
     -PenableAndroid=true --offline --dependency-verification=off -I <临时 init 脚本>
 ```
 
-临时 init 脚本内容只有：
+临时 init 脚本内容为：
 
 ```kotlin
 settingsEvaluated { dependencyResolutionManagement.repositories.mavenLocal() }
 ```
 
-要点与限制：
-
-- 该方式验证的是「本机构建的上游 1.2.0 + 当前源码」，**不是** Central 上即将发布的字节；`gradle/verification-metadata.xml` 与 `upstream-candidates.toml` 的哈希校验必须以正式发布为准，所以这种运行要配合 `--dependency-verification=off`。
-- `ui-ref-bridge` 需要 `meguviz-ref-core:1.2.0`。它的源码在 [MeguvizRef](https://github.com/Meguvizarchic/MeguvizRef) 的 `main`（`gradle.properties` 里 `meguviz.version=1.2.0`）；截至 2026-11-09 该仓库还没有 `1.2.0` 标签，Maven Central 上 `meguviz-ref-core` 也只有 `1.0.0`。在 MeguvizRef 检出里执行 `./gradlew :ref-core:publishLibraryPublicationToMavenLocal --offline` 即可补上这个坐标。
-- MeguvizDrawable 的 `-Pmeguviz.profile=bridges` 需要 `meguviz-android-runtime` 与 `meguviz-ui-core` 的 1.2.0，可用同一 init 脚本与同两个发布步骤验证。
-
-维护者曾在本机用上述手法跑过三座桥：`ui-android-bridge` 14 例（另有 8 例设备用例，见上文“桥接层热路径”）、`ui-lumen-bridge` 编译 + lint、`ui-ref-bridge` 13 例（当时的 1.2.0 候选；回执不随仓库提交，发布前应按上面的步骤重跑）。
+- 该方式仅用于验证「本机构建的上游 + 当前源码」，由于绕过了正式发布校验，需配合 `--dependency-verification=off`，不得替代正式发布的校验与回归验证。
+- 联调本地 [MeguvizRef](https://github.com/Meguvizarchic/MeguvizRef) 改动时，在 MeguvizRef 检出中执行 `./gradlew :ref-core:publishLibraryPublicationToMavenLocal --offline` 即可向 `mavenLocal()` 写入测试制品。
 
 ## 维护规则
 
